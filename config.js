@@ -7,8 +7,8 @@ const CONFIG = {
   // API KEYS
   // ----------------------------------------------------------
   KEYS: {
-    SERPER: "eb442407c208cb989860cef0cd8442a81391e379",
-    GEMINI: "AIzaSyDnB05y2KjJNIFb3jSTo9pMwlRmjgeRujk"
+    SERPER: "YOUR_KEY",
+    GEMINI: "YOUR_KEY",
   },
 
   // ----------------------------------------------------------
