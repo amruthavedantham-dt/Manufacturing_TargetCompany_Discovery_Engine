@@ -7,10 +7,17 @@ const CONFIG = {
   // API KEYS
   // ----------------------------------------------------------
   KEYS: {
+    get SERPER() {
+      return PropertiesService
+        .getScriptProperties()
+        .getProperty('SERPER_API_KEY');
+    },
 
-    SERPER: "YOUR_KEY",
-    GEMINI: "YOUR_KEY",
-
+    get GEMINI() {
+      return PropertiesService
+        .getScriptProperties()
+        .getProperty('GEMINI_API_KEY');
+    }
   },
 
   // ----------------------------------------------------------
@@ -325,7 +332,10 @@ const CONFIG = {
     // CHANGED: was too narrow — demanded patents+DSIR+USFDA+WHO-GMP+EU-GMP all at once
     C3: '"{company}" chemical manufacturer India R&D innovation technical product',
 
-    C4: '"{company}" (site:tofler.in OR site:zaubacorp.com OR site:linkedin.com) founder proprietor partner director MD "managing director" India',
+    // C4 name resolution — three targeted gates, tried in order
+    C4_TOFLER:  '"{company}" (director OR "managing director" OR founder OR promoter) site:tofler.in',
+    C4_ZAUBA:   '"{company}" (director OR "managing director" OR founder OR promoter) site:zaubacorp.com',
+    C4_GENERAL: '"{company}" ("managing director" OR "proprietor" OR "founder") India',
 
     C4_BACKGROUND: '"{person}" "{company}" education qualification engineer scientist PhD doctorate IIT IISc IISER NIT BITS ISRO DRDO patent publication',
 
