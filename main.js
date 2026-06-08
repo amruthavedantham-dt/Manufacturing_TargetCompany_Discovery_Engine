@@ -41,15 +41,13 @@ function cleanCompanyName(rawName) {
 
 // ============================================================
 // SECTION 4 — STAGE 1 GATES
-// Gate 1: Manufacturer check
-// Gate 2: PE/Acquired check
-// Gate 3: Revenue — direct regex → heuristic → PENDING for Gemini
+// Gate 1: Revenue — direct search → signals → heuristic → PENDING for Gemini
+// Gate 2: Manufacturer check
+// Gate 3: PE/Acquired check
 // ============================================================
-function runStage1(companyObj) {
-  const company = cleanCompanyName(companyObj.company);
-  Logger.log(`[Stage1 START] ${company}`);
 
-  // ── Gate 1: Manufacturer ──────────────────────────────────
+// ── Gate 2 helper — called from runStage1 and resolveGeminiBatch ──
+function runManufacturingGate(company) {
   const mfgSnippets = callSerper(company, "STAGE1_MFG");
   Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
   const mfgText = String(mfgSnippets || "").toLowerCase();
@@ -66,20 +64,15 @@ function runStage1(companyObj) {
 
   if (!manufacturerHit || croHit) {
     let failReason = "No manufacturing signal found";
-    if (croHit) failReason = `CRO/service detected: ${croHit}`;
+    if (croHit)      failReason = `CRO/service detected: ${croHit}`;
     else if (traderHit) failReason = `Trader/distributor only — no manufacturing signal: ${traderHit}`;
-    Logger.log(`[Gate1 FAIL] ${company} — ${failReason}`);
-    return {
-      manufacturer: false,
-      acquired:     false,
-      revenueBand:  { band: "-", confidence: "-", evidence: "-" },
-      status:       "FAIL",
-      failReason:   failReason,
-    };
+    return { pass: false, failReason };
   }
-  Logger.log(`[Gate1 PASS] ${company} — keyword: ${manufacturerHit}`);
+  return { pass: true, failReason: "" };
+}
 
-  // ── Gate 2: PE / Acquired ─────────────────────────────────
+// ── Gate 3 helper — called from runStage1 and resolveGeminiBatch ──
+function runAcquiredGate(company) {
   const bizSnippets = callSerper(company, "STAGE1_BIZ");
   Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
   const bizText = String(bizSnippets || "").toLowerCase();
@@ -87,111 +80,106 @@ function runStage1(companyObj) {
   const peHit = CONFIG.STAGE1.PE_ACQUIRED.find(kw =>
     bizText.includes(kw.toLowerCase())
   );
+  return { acquired: !!peHit, peHit: peHit || null };
+}
 
-  if (peHit) {
-    Logger.log(`[Gate2 FAIL] ${company} — PE/acquired: ${peHit}`);
-    return {
-      manufacturer: true,
-      acquired:     true,
-      revenueBand:  { band: "-", confidence: "-", evidence: "-" },
-      status:       "FAIL",
-      failReason:   `PE/acquired detected: ${peHit}`,
-    };
-  }
-  Logger.log(`[Gate2 PASS] ${company}`);
+function runStage1(companyObj) {
+  const company = cleanCompanyName(companyObj.company);
+  Logger.log(`[Stage1 START] ${company}`);
 
-  // ── Gate 3: Revenue ───────────────────────────────────────
-
-  // Step 3a — try direct regex on MFG snippets (free, already fetched)
-  let revenueBand = extractDirectRevenue(mfgText);
-  if (revenueBand) {
-    Logger.log(`[Gate3 3a MFG] ${company} → ${revenueBand.band}`);
-    return rt_buildStage1Result(true, false, revenueBand, company);
-  }
-
-  // Step 3b — dedicated Tofler/Zauba/Screener search
+  // ── Gate 1: Revenue ───────────────────────────────────────
+  // Step 1a — dedicated Tofler/Zauba/Screener search
   const directSnippets = callSerper(company, "REVENUE_DIRECT");
   Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
   const directText = String(directSnippets || "");
 
-  revenueBand = extractDirectRevenue(directText);
-  if (revenueBand) {
-    Logger.log(`[Gate3 3b REVENUE_DIRECT] ${company} → ${revenueBand.band}`);
-    return rt_buildStage1Result(true, false, revenueBand, company);
-  }
+  let revenueBand = extractDirectRevenue(directText);
 
-  // Step 3c — signals search
-  const signalSnippets = callSerper(company, "REVENUE_SIGNALS");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
-  const signalText = String(signalSnippets || "").trim();
+  if (!revenueBand) {
+    // Step 1b — signals search
+    const signalSnippets = callSerper(company, "REVENUE_SIGNALS");
+    Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
+    const signalText      = String(signalSnippets || "").trim();
+    const combinedEvidence = (directText + " " + signalText).trim();
 
-  // Try direct regex on signals too
-  if (signalText.length > 50) {
-    revenueBand = extractDirectRevenue(signalText);
-    if (revenueBand) {
-      Logger.log(`[Gate3 3c REVENUE_SIGNALS direct] ${company} → ${revenueBand.band}`);
-      return rt_buildStage1Result(true, false, revenueBand, company);
+    if (signalText.length > 50) {
+      revenueBand = extractDirectRevenue(signalText);
+    }
+
+    if (!revenueBand && combinedEvidence.length > 50) {
+      const heuristic = employeeHeuristic(combinedEvidence);
+      if (heuristic) revenueBand = heuristic;
+    }
+
+    if (!revenueBand && combinedEvidence.length > 50) {
+      Logger.log(`[Gate1 PENDING GEMINI] ${company}`);
+      return {
+        manufacturer: false,
+        acquired:     false,
+        revenueBand:  { band: "PENDING_REVENUE", confidence: "Low", evidence: "Awaiting Gemini batch" },
+        status:       "PENDING_REVENUE",
+        failReason:   "",
+      };
+    }
+
+    if (!revenueBand) {
+      Logger.log(`[Gate1 No evidence] ${company}`);
+      return {
+        manufacturer: false,
+        acquired:     false,
+        revenueBand:  { band: "Unknown", confidence: "Low", evidence: "No revenue evidence found" },
+        status:       "FAIL",
+        failReason:   "No revenue evidence found",
+      };
     }
   }
 
-  // Try employee heuristic on combined evidence
-  const combinedEvidence = (directText + " " + signalText).trim();
-  if (combinedEvidence.length > 50) {
-    const heuristic = employeeHeuristic(combinedEvidence);
-    if (heuristic) {
-      Logger.log(`[Gate3 3c Heuristic] ${company} → ${heuristic.band}`);
-      return rt_buildStage1Result(true, false, heuristic, company);
-    }
-  }
-
-  // Step 3d — evidence exists but needs Gemini — defer to batch
-  if (combinedEvidence.length > 50) {
-    Logger.log(`[Gate3 PENDING GEMINI] ${company}`);
+  if (!CONFIG.PIPELINE.STAGE1_PASS_BANDS.includes(revenueBand.band)) {
+    Logger.log(`[Gate1 FAIL] ${company} → ${revenueBand.band}`);
     return {
-      manufacturer: true,
+      manufacturer: false,
       acquired:     false,
-      revenueBand:  {
-        band:       "PENDING_REVENUE",
-        confidence: "Low",
-        evidence:   "Awaiting Gemini batch"
-      },
-      status:     "PENDING_REVENUE",
-      failReason: "",
+      revenueBand:  revenueBand,
+      status:       "FAIL",
+      failReason:   `Revenue band rejected: ${revenueBand.band}`,
     };
   }
+  Logger.log(`[Gate1 PASS] ${company} → ${revenueBand.band}`);
 
-  // Step 3e — no evidence at all → FAIL
-  Logger.log(`[Gate3 3e No evidence] ${company}`);
+  // ── Gate 2: Manufacturer ──────────────────────────────────
+  const mfgResult = runManufacturingGate(company);
+  if (!mfgResult.pass) {
+    Logger.log(`[Gate2 FAIL] ${company} — ${mfgResult.failReason}`);
+    return {
+      manufacturer: false,
+      acquired:     false,
+      revenueBand:  revenueBand,
+      status:       "FAIL",
+      failReason:   mfgResult.failReason,
+    };
+  }
+  Logger.log(`[Gate2 PASS] ${company}`);
+
+  // ── Gate 3: PE / Acquired ─────────────────────────────────
+  const acqResult = runAcquiredGate(company);
+  if (acqResult.acquired) {
+    Logger.log(`[Gate3 FAIL] ${company} — PE/acquired: ${acqResult.peHit}`);
+    return {
+      manufacturer: true,
+      acquired:     true,
+      revenueBand:  revenueBand,
+      status:       "FAIL",
+      failReason:   `PE/acquired detected: ${acqResult.peHit}`,
+    };
+  }
+  Logger.log(`[Gate3 PASS] ${company}`);
+
   return {
     manufacturer: true,
     acquired:     false,
-    revenueBand:  {
-      band:       "Unknown",
-      confidence: "Low",
-      evidence:   "No revenue evidence found"
-    },
-    status:     "FAIL",
-    failReason: "No revenue evidence found",
-  };
-}
-
-// Helper — builds Stage1 result and applies pass/fail logic
-function rt_buildStage1Result(manufacturer, acquired, revenueBand, company) {
-  const allowedBands = CONFIG.PIPELINE.STAGE1_PASS_BANDS;
-  const passed = allowedBands.includes(revenueBand.band);
-
-  if (!passed) {
-    Logger.log(`[Gate3 FAIL] ${company} → ${revenueBand.band}`);
-  } else {
-    Logger.log(`[Gate3 PASS] ${company} → ${revenueBand.band}`);
-  }
-
-  return {
-    manufacturer: manufacturer,
-    acquired:     acquired,
     revenueBand:  revenueBand,
-    status:       passed ? "PASS" : "FAIL",
-    failReason:   passed ? "" : `Revenue band rejected: ${revenueBand.band}`,
+    status:       "PASS",
+    failReason:   "",
   };
 }
 
@@ -219,12 +207,6 @@ function processCompanyStage1(companyObj) {
   }
 }
 
-// ============================================================
-// SECTION 6 — INITIAL PIPELINE
-// Runs Stage 1 gates for all companies
-// Saves PENDING_REVENUE for Gemini batch in Section 7
-// Run first. Then run resolvePendingRevenue().
-// ============================================================
 // ============================================================
 // SECTION 6 — INITIAL PIPELINE
 // Runs Stage 1 for all companies
@@ -386,8 +368,10 @@ function resolveGeminiBatch(pendingQueue) {
 
     const band = result.band || CONFIG.REVENUE.BANDS.UNKNOWN;
 
-    let finalStatus = "FAIL";
-    let finalReason = `Revenue band rejected: ${band}`;
+    let finalStatus      = "FAIL";
+    let finalReason      = `Revenue band rejected: ${band}`;
+    let manufacturerFlag = "NO";
+    let acquiredFlag     = "NO";
 
     if (band === CONFIG.REVENUE.BANDS.UNKNOWN) {
       const evidenceCheck = (
@@ -410,8 +394,26 @@ function resolveGeminiBatch(pendingQueue) {
       }
 
     } else if (CONFIG.PIPELINE.STAGE1_PASS_BANDS.includes(band)) {
-      finalStatus = "PASS";
-      finalReason = "";
+      // Revenue passed — run Gate 2 (Manufacturing) then Gate 3 (Acquired)
+      const mfgResult = runManufacturingGate(item.company);
+      if (!mfgResult.pass) {
+        finalStatus = "FAIL";
+        finalReason = mfgResult.failReason;
+        Logger.log(`[resolveGeminiBatch Gate2 FAIL] ${item.company} — ${mfgResult.failReason}`);
+      } else {
+        manufacturerFlag = "YES";
+        const acqResult = runAcquiredGate(item.company);
+        if (acqResult.acquired) {
+          finalStatus  = "FAIL";
+          finalReason  = `PE/acquired detected: ${acqResult.peHit}`;
+          acquiredFlag = "YES";
+          Logger.log(`[resolveGeminiBatch Gate3 FAIL] ${item.company} — PE: ${acqResult.peHit}`);
+        } else {
+          finalStatus = "PASS";
+          finalReason = "";
+          Logger.log(`[resolveGeminiBatch Gate3 PASS] ${item.company}`);
+        }
+      }
     }
 
     Logger.log(`[resolveGeminiBatch] ${item.company} → ${band} → ${finalStatus}`);
@@ -420,7 +422,7 @@ function resolveGeminiBatch(pendingQueue) {
       band:       band,
       confidence: result.confidence || CONFIG.REVENUE.CONFIDENCE.LOW,
       evidence:   result.signal     || result.evidence || "Gemini batch",
-    }, finalStatus, finalReason);
+    }, finalStatus, finalReason, manufacturerFlag, acquiredFlag);
   });
 
   SpreadsheetApp.flush();
@@ -664,8 +666,10 @@ function resetAndRunFresh() {
 }
 
 
-function updateStage1Revenue(sheet, rowNum, revenueBand, status, failReason) {
+function updateStage1Revenue(sheet, rowNum, revenueBand, status, failReason, manufacturerFlag, acquiredFlag) {
   try {
+    if (manufacturerFlag !== undefined) sheet.getRange(rowNum, 4).setValue(manufacturerFlag);
+    if (acquiredFlag     !== undefined) sheet.getRange(rowNum, 5).setValue(acquiredFlag);
     sheet.getRange(rowNum, 6).setValue(revenueBand.band       || "Unknown");
     sheet.getRange(rowNum, 7).setValue(revenueBand.confidence || "Low");
     sheet.getRange(rowNum, 8).setValue(revenueBand.evidence   || "");
