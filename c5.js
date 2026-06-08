@@ -15,6 +15,12 @@ function runC5(companyObj) {
   const company = companyObj.company;
   Logger.log(`\nC5: starting for "${company}"`);
 
+  const stage1 = getStage1Status(company);
+  if (stage1 && String(stage1.manufacturerFlag).trim().toUpperCase() === 'NO') {
+    Logger.log(`C5: "${company}" — Manufacturer_Flag=NO, capping at default score`);
+    return buildC5Result(CONFIG.C5.DEFAULT, 'Non-manufacturer confirmed in Stage 1 — C5 capped');
+  }
+
   // --------------------------------------------------------
   // Step 1: Read from cache — try STAGE1_MFG first,
   // then STAGE1_BIZ, then C3 (broadest evidence).

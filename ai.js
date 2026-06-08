@@ -6,7 +6,6 @@
 // Just clean API calls that return data or null.
 // ============================================================
 
-
 // ============================================================
 // SECTION 1 — RATE LIMITER
 // Central sleep function — all modules call this, never
@@ -168,7 +167,7 @@ function callGemini(prompt) {
   let rawText = null;
 
   try {
-    Logger.log(url);
+    Logger.log(`callGemini: sending request to Gemini`);
     const response = UrlFetchApp.fetch(url, options);
     const code     = response.getResponseCode();
 
@@ -290,7 +289,7 @@ function callGeminiNoThink(prompt) {
   let rawText = null;
 
   try {
-    Logger.log(url);
+    Logger.log(`callGemini: sending request to Gemini`);
     const response = UrlFetchApp.fetch(url, options);
     const code     = response.getResponseCode();
 

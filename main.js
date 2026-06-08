@@ -1,7 +1,7 @@
 // ============================================================
 // main.gs
 // ICP PIPELINE ORCHESTRATOR
-// Flow: runInitialPipeline → resolvePendingRevenue → runFinalScoringPipeline
+// Flow: runInitialPipeline → runFinalScoringPipeline
 // ============================================================
 
 // ============================================================
@@ -64,10 +64,10 @@ function runStage1(companyObj) {
     mfgText.includes(kw.toLowerCase())
   );
 
-  if (!manufacturerHit || (!manufacturerHit && traderHit) || croHit) {
+  if (!manufacturerHit || croHit) {
     let failReason = "No manufacturing signal found";
-    if (!manufacturerHit && traderHit) failReason = `Trader/distributor detected: ${traderHit}`;
-    if (croHit)    failReason = `CRO/service detected: ${croHit}`;
+    if (croHit) failReason = `CRO/service detected: ${croHit}`;
+    else if (traderHit) failReason = `Trader/distributor only — no manufacturing signal: ${traderHit}`;
     Logger.log(`[Gate1 FAIL] ${company} — ${failReason}`);
     return {
       manufacturer: false,
@@ -491,7 +491,7 @@ function runFinalScoringPipeline() {
   Logger.log(`=== runFinalScoringPipeline START ===`);
 
   try {
-    const companies  = getCompanies();
+    const companies  = getPassedCompanies();
     const checkpoint = getCheckpoint();
     Logger.log(`[Scoring Checkpoint] Resuming from index ${checkpoint}`);
 
@@ -518,7 +518,6 @@ function runFinalScoringPipeline() {
 
       const stage1 = getStage1Status(companyObj.company);
       if (!stage1 || stage1.status !== "PASS") {
-        saveCheckpoint(i + 1);
         Logger.log(`[${i + 1}/${companies.length}] SKIPPED — stage1 not PASS: ${companyObj.company} (${stage1?.status || "not found"})`);
         continue;
       }
@@ -588,7 +587,7 @@ function runFinalScoringPipelineTest() {
   Logger.log(`=== runFinalScoringPipelineTest START ===`);
 
   try {
-    const companies = getCompanies();
+    const companies = getPassedCompanies();
     let tested      = 0;
 
     for (const companyObj of companies) {
@@ -642,18 +641,18 @@ function runFinalScoringPipelineTest() {
 
         tested++;
 
-                tested++;
-              } catch (err) {
-                Logger.log(`[runFinalScoringPipelineTest ERROR] ${companyObj.company} | ${err.message}`);
-              }
-            }
-
-            Logger.log(`=== runFinalScoringPipelineTest COMPLETE | ${tested} tested ===`);
-
-          } catch (err) {
-            Logger.log(`[runFinalScoringPipelineTest FATAL] ${err.message}`);
-          }
+              
+      } catch (err) {
+          Logger.log(`[runFinalScoringPipelineTest ERROR] ${companyObj.company} | ${err.message}`);
         }
+      }
+
+    Logger.log(`=== runFinalScoringPipelineTest COMPLETE | ${tested} tested ===`);
+
+  } catch (err) {
+    Logger.log(`[runFinalScoringPipelineTest FATAL] ${err.message}`);
+  }
+}
 
 // ============================================================
 // SECTION 10 — RESET HELPERS
@@ -688,4 +687,20 @@ function checkState() {
 function setCheckpointTo500() {
   saveCheckpoint(500);
   Logger.log(`Checkpoint set to 500`);
+}
+
+function getPassedCompanies() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.STAGE1);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+
+  return data
+    .filter(row => String(row[8]).trim() === 'PASS')
+    .map(row => ({
+      company: row[0],
+      website: row[1],
+      source:  row[2],
+    }));
 }

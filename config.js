@@ -7,8 +7,10 @@ const CONFIG = {
   // API KEYS
   // ----------------------------------------------------------
   KEYS: {
+
     SERPER: "YOUR_KEY",
     GEMINI: "YOUR_KEY",
+
   },
 
   // ----------------------------------------------------------
@@ -17,9 +19,10 @@ const CONFIG = {
   GEMINI: {
 
     MODEL: "gemini-2.5-flash",
+    ENDPOINT: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
 
-    ENDPOINT:
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    //MODEL: "gemini-2.0-flash",
+    //ENDPOINT: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
 
     MAX_TOKENS: 2048,
 
@@ -98,11 +101,11 @@ const CONFIG = {
 
     SERPER_SLEEP: 1200,
 
-    GEMINI_SLEEP: 3000,
+    GEMINI_SLEEP: 8000, // prev 3000
 
-    RETRY_SLEEPS: [5000, 10000],
-
-    MAX_RETRIES: 2,
+    RETRY_SLEEPS: [10000, 20000, 30000],  // CHANGED: was [10000, 15000, 30000] — longer backoff on 503s
+    
+    MAX_RETRIES: 3,
   },
 
 
@@ -319,14 +322,14 @@ const CONFIG = {
     REVENUE_SIGNALS:
       '"{company}" ("annual revenue" OR "turnover" OR "crore" OR "employees" OR "workforce" OR "manufacturing plant" OR "production capacity" OR "export" OR "founded") -site:justdial.com -site:indiamart.com -site:tradeindia.com -site:facebook.com -site:instagram.com -site:sulekha.com -site:exportersindia.com',
 
-    C3:
-      '"{company}" patents DSIR USFDA WHO-GMP EU-GMP proprietary custom synthesis innovation R&D',
+    // CHANGED: was too narrow — demanded patents+DSIR+USFDA+WHO-GMP+EU-GMP all at once
+    C3: '"{company}" chemical manufacturer India R&D innovation technical product',
 
-    C4:
-      '"{company}" founder MD director IIT PhD engineer scientist background',
+    C4: '"{company}" (site:tofler.in OR site:zaubacorp.com OR site:linkedin.com) founder proprietor partner director MD "managing director" India',
 
-    C6:
-      '"{company}" hiring expansion new plant certifications exports news 2024 2025',
+    C4_BACKGROUND: '"{person}" "{company}" education qualification engineer scientist PhD doctorate IIT IISc IISER NIT BITS ISRO DRDO patent publication',
+
+    C6: '"{company}" India 2024 2025',
   },
 
 
@@ -354,10 +357,11 @@ const CONFIG = {
     },
 
     SCORE_MAP: [
-
       { minWeight: 4, score: 25 },
 
       { minWeight: 1, score: 12 },
+
+      { minWeight: 0.5, score: 6 },
 
       { minWeight: 0, score: 0 },
     ],
@@ -387,7 +391,7 @@ const CONFIG = {
       "iim",
       "iiser",
       "iisc",
-      "nit ",
+      "nit",
       "bits pilani",
       "phd",
       "ph.d",
@@ -861,18 +865,65 @@ const CONFIG = {
     // --------------------------------------------------------
     // C4 PROMPT
     // -------------------------------------------------------- 
+    // Gemini call 1 — name extraction only, lightweight
+      C4_NAME: `Extract the decision-maker's name from these search results about an Indian company.
 
-    C4: `You are a strict manufacturing research analyst. Evaluate the technical background of the founder or MD.
+      Company: {company}
 
-          Company: {company}
-          Evidence: {evidence}
+      Evidence:
+      {evidence}
 
-          Return ONLY this exact JSON with no other text:
-          {"depth":"Strong/Moderate/None","name":"founder or MD name or Unknown","bg":"max 15 words on background","x":"max 15 words reason"}
+      Identify the most senior person:
+      - Prefer: Founder, MD, Managing Director, Chairman, Promoter, CEO, Proprietor
+      - If multiple directors listed, pick the most senior title
+      - Names may appear as "Name - Title", "Title: Name", "Directors are Name1, Name2", or "Name is the founder"
+      - If no person found, use "Unknown"
 
-          depth = Strong if IIT/IIM/PhD/ISRO/DRDO/scientist background found
-          depth = Moderate if engineering/technical degree found
-          depth = None if no technical background found`,
+
+      Priority order: Founder > MD > Managing Director > Chairman > Promoter > CEO > Proprietor > Director
+
+      If multiple people found, pick the most senior title.
+      If only a LinkedIn URL is available with no title context, extract the name from the URL slug.
+
+      Return ONLY:
+      {"name":"Full Name or Unknown"}`,
+
+      // Gemini call 2 — depth classification only, no name needed
+      C4_DEPTH: `You are classifying the technical depth of a decision-maker at an Indian manufacturing company.
+
+      Company: {company}
+
+      Evidence:
+      {evidence}
+
+      Strong:
+      - PhD, IIT, IISc, IISER, NIT, BITS
+      - ex-ISRO, ex-DRDO, scientist, patent holder, published researcher
+
+      Moderate:
+      - B.Tech, BE, M.Tech, MSc
+      - engineering background, technical founder, R&D leadership
+
+      None:
+      - MBA only, finance background, sales background, no evidence found
+
+      Return ONLY:
+      {"depth":"Strong/Moderate/None","bg":"max 15 words","x":"max 15 words"}`,
+
+    // --------------------------------------------------------
+    // C6 PROMPT
+    // -------------------------------------------------------- 
+    C6: `You are evaluating growth signals for an Indian manufacturer.
+        Evidence: {evidence}
+
+        Return ONLY this exact JSON with no other text:
+        {"hiring":false,"facility":false,"certifications":false,"active":false,"exports":false,"x":"max 15 words on strongest signal"}
+
+        hiring = true if job postings, recruitment, team expansion, or headcount growth mentioned
+        facility = true if new plant, capacity increase, greenfield, brownfield, expansion, new unit mentioned
+        certifications = true if USFDA, WHO-GMP, EU-GMP, DSIR, ISO, HALAL, REACH, or approval mentioned
+        active = true if any news, press release, announcement, blog, or event from 2024 or 2025
+        exports = true if export destinations, global customers, USA, Europe, Japan, or revenue growth mentioned`,
 
   },
 };

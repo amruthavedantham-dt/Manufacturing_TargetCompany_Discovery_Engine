@@ -1,5 +1,5 @@
 // ============================================================
-// test_revenue_v2.gs  —  STANDALONE revenue tester
+// test_revenue.gs  —  STANDALONE revenue tester
 // No dependency on main pipeline (no CONFIG, no shared cache)
 // Reads from MASTER_TEST → writes to REVENUE_TEST_RESULTS
 // ============================================================

@@ -13,53 +13,99 @@
 
 function runC6(companyObj) {
   if (!companyObj || !companyObj.company) {
-    Logger.log("C6 ERROR: runC6() called with no companyObj. Run testC6() instead.");
+    Logger.log("C6 ERROR: runC6() called with no companyObj.");
     return { c6: 0, c6Signals: "Invalid call", c6Confidence: "Low" };
   }
 
   const company = companyObj.company;
   Logger.log(`\nC6: starting for "${company}"`);
 
-  // --------------------------------------------------------
-  // Step 1: Get snippets — cache first, live call on miss.
-  // C6 uses its own dedicated query (hiring/expansion/news)
-  // which Stage 1 and C3 queries don't cover well.
-  // --------------------------------------------------------
+  // ── Step 1: Get C6-specific snippets ─────────────────────
   const snippets = callSerper(company, "C6");
 
-  // --------------------------------------------------------
-  // Step 2: Handle empty evidence
-  // --------------------------------------------------------
-  if (!snippets || snippets.trim().length < 50) {
-    Logger.log(`C6: insufficient evidence for "${company}" — scoring 0`);
-    return {
-      c6:           0,
-      c6Signals:    "No search evidence found",
-      c6Confidence: "Low",
-    };
+  // ── Step 2: Also pull from Stage 1 cache as fallback ─────
+  const cachedMfg = getCachedSearch(company, "STAGE1_MFG") || "";
+  const cachedC3  = getCachedSearch(company, "C3")         || "";
+
+  const combinedEvidence = [
+    snippets     || "",
+    cachedMfg,
+    cachedC3,
+  ].join("\n").trim();
+
+  if (combinedEvidence.length < 50) {
+    Logger.log(`C6: no evidence at all for "${company}" — scoring 0`);
+    return { c6: 0, c6Signals: "No search evidence found", c6Confidence: "Low" };
   }
 
-  // --------------------------------------------------------
-  // Step 3: Deterministic signal detection
-  // No AI — pure keyword matching against CONFIG.C6.SIGNALS
-  // --------------------------------------------------------
-  const { firedSignals, totalStrength } = detectC6Signals(snippets);
+  // ── Step 3: Deterministic pass (fast, no API cost) ───────
+  const { firedSignals, totalStrength } = detectC6Signals(combinedEvidence);
 
-  // --------------------------------------------------------
-  // Step 4: Score from signal strength
-  // --------------------------------------------------------
-  const c6Score      = getC6Score(totalStrength);   // from config.gs helper
-  const c6Confidence = getC6Confidence(totalStrength);
-  const c6Signals    = buildC6SignalString(firedSignals);
+  // If deterministic already found 2+ signals, trust it — skip Gemini
+  if (totalStrength >= 2) {
+    const c6Score      = getC6Score(totalStrength);
+    const c6Confidence = getC6Confidence(totalStrength);
+    const c6Signals    = buildC6SignalString(firedSignals);
+    Logger.log(`C6: "${company}" → deterministic strong (${totalStrength}) → score=${c6Score}`);
+    return { c6: c6Score, c6Signals, c6Confidence };
+  }
 
-  Logger.log(`C6: "${company}" → strength=${totalStrength}, score=${c6Score}, confidence=${c6Confidence}`);
-  Logger.log(`C6: signals fired: ${c6Signals || "none"}`);
+  // ── Step 4: Gemini pass for ambiguous cases ───────────────
+  // Deterministic found 0 or 1 signals — Gemini reads more carefully
+  Logger.log(`C6: "${company}" → deterministic weak (${totalStrength}), calling Gemini`);
 
-  return {
-    c6:           c6Score,
-    c6Signals:    c6Signals,
-    c6Confidence: c6Confidence,
-  };
+  const evidenceTrimmed = combinedEvidence.substring(0, 2000);
+  const prompt = CONFIG.PROMPTS.C6.replace("{evidence}", evidenceTrimmed);
+  const raw    = callGeminiWithRetry(prompt);
+
+  if (!raw) {
+    Logger.log(`C6: Gemini null for "${company}" — using deterministic result`);
+    const c6Score      = getC6Score(totalStrength);
+    const c6Confidence = getC6Confidence(totalStrength);
+    const c6Signals    = buildC6SignalString(firedSignals) || "No signals detected";
+    return { c6: c6Score, c6Signals, c6Confidence };
+  }
+
+  const parsed = parseGeminiJSON(raw);
+
+  if (!parsed) {
+    Logger.log(`C6: Gemini parse failed for "${company}" — using deterministic result`);
+    const c6Score      = getC6Score(totalStrength);
+    const c6Confidence = getC6Confidence(totalStrength);
+    const c6Signals    = buildC6SignalString(firedSignals) || "No signals detected";
+    return { c6: c6Score, c6Signals, c6Confidence };
+  }
+
+  // ── Step 5: Merge Gemini result with deterministic ────────
+  // Count how many of the 5 boolean flags Gemini set to true
+  const geminiSignals = [];
+  if (parsed.hiring)        geminiSignals.push("Hiring");
+  if (parsed.facility)      geminiSignals.push("Facility_Expansion");
+  if (parsed.certifications) geminiSignals.push("Certifications");
+  if (parsed.active)        geminiSignals.push("Active_News");
+  if (parsed.exports)       geminiSignals.push("Export_Growth");
+
+  // Merge: take the union of deterministic and Gemini signals
+  const deterministicNames = firedSignals.map(s => s.signal);
+  const allSignalNames     = [...new Set([...deterministicNames, ...geminiSignals])];
+  const mergedStrength     = allSignalNames.length;
+
+  const c6Score      = getC6Score(mergedStrength);
+  const c6Confidence = getC6Confidence(mergedStrength);
+  const reasonNote   = String(parsed.x || "").trim();
+
+  // Build signal string: deterministic signals keep their keyword, Gemini-only ones labelled
+  const deterministicStr = buildC6SignalString(firedSignals);
+  const geminiOnly       = geminiSignals.filter(s => !deterministicNames.includes(s));
+  const geminiStr        = geminiOnly.map(s => `${s} (Gemini)`).join(", ");
+  const c6Signals        = [deterministicStr, geminiStr].filter(Boolean).join(", ")
+                           || "No signals detected";
+
+  Logger.log(`C6: "${company}" → merged strength=${mergedStrength}, score=${c6Score}`);
+  Logger.log(`C6: deterministic=${deterministicNames.join(",") || "none"} | gemini=${geminiOnly.join(",") || "none"}`);
+  if (reasonNote) Logger.log(`C6: Gemini note: ${reasonNote}`);
+
+  return { c6: c6Score, c6Signals, c6Confidence };
 }
 
 // ============================================================
