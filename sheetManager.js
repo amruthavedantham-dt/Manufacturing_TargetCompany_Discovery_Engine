@@ -21,7 +21,7 @@ function setupSheets() {
       // STAGE 1 RESULTS
       // ------------------------------------------------------
       {
-        name: CONFIG.SHEETS.STAGE1,
+        name: SHEETS.STAGE1,
 
         headers: [
 
@@ -45,7 +45,7 @@ function setupSheets() {
       // SEARCH CACHE
       // ------------------------------------------------------
       {
-        name: CONFIG.SHEETS.CACHE,
+        name: SHEETS.CACHE,
 
         headers: [
 
@@ -62,7 +62,7 @@ function setupSheets() {
       // DO NOT CHANGE TODAY
       // ------------------------------------------------------
       {
-        name: CONFIG.SHEETS.SCORES,
+        name: SHEETS.SCORES,
 
         headers: [
 
@@ -101,7 +101,7 @@ function setupSheets() {
       // DO NOT CHANGE TODAY
       // ------------------------------------------------------
       {
-        name: CONFIG.SHEETS.SHORTLIST,
+        name: SHEETS.SHORTLIST,
 
         headers: [
 
@@ -220,7 +220,7 @@ function getCompanies() {
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.MASTER
+        SHEETS.MASTER
       );
 
     if (!sheet) {
@@ -257,7 +257,7 @@ function getCompanies() {
     data.forEach((row, index) => {
 
       const company = String(
-        row[CONFIG.MASTER_COLS.COMPANY] || ""
+        row[MASTER_COLS.COMPANY] || ""
       ).trim();
 
       if (!company) return;
@@ -267,11 +267,11 @@ function getCompanies() {
         company,
 
         website: String(
-          row[CONFIG.MASTER_COLS.WEBSITE] || ""
+          row[MASTER_COLS.WEBSITE] || ""
         ).trim(),
 
         source: String(
-          row[CONFIG.MASTER_COLS.SOURCE] || ""
+          row[MASTER_COLS.SOURCE] || ""
         ).trim(),
 
         rowIndex: index + 2,
@@ -392,7 +392,7 @@ function getCachedSearch(
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.CACHE
+        SHEETS.CACHE
       );
 
     if (
@@ -478,7 +478,7 @@ function saveToCache(
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.CACHE
+        SHEETS.CACHE
       );
 
     if (!sheet) {
@@ -518,7 +518,7 @@ function saveToCache(
 function writeStage1Result(companyObj, result) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(CONFIG.SHEETS.STAGE1);
+    const sheet = ss.getSheetByName(SHEETS.STAGE1);
 
     if (!sheet) throw new Error("STAGE1_RESULTS sheet missing");
 
@@ -612,7 +612,7 @@ function writeScores(
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.SCORES
+        SHEETS.SCORES
       );
 
     if (!sheet) {
@@ -673,9 +673,9 @@ function buildShortlist() {
     Logger.log(`[buildShortlist START]`);
 
     const ss            = SpreadsheetApp.getActiveSpreadsheet();
-    const scoresSheet   = ss.getSheetByName(CONFIG.SHEETS.SCORES);
-    const stage1Sheet   = ss.getSheetByName(CONFIG.SHEETS.STAGE1);
-    const shortlistSheet = ss.getSheetByName(CONFIG.SHEETS.SHORTLIST);
+    const scoresSheet   = ss.getSheetByName(SHEETS.SCORES);
+    const stage1Sheet   = ss.getSheetByName(SHEETS.STAGE1);
+    const shortlistSheet = ss.getSheetByName(SHEETS.SHORTLIST);
 
     if (!scoresSheet || !shortlistSheet || !stage1Sheet) {
       throw new Error("Required sheets missing — run setupSheets() first");
@@ -849,7 +849,7 @@ function isAlreadyScored(
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.SCORES
+        SHEETS.SCORES
       );
 
     if (
@@ -907,7 +907,7 @@ function isAlreadyFiltered(
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.STAGE1
+        SHEETS.STAGE1
       );
 
     if (
@@ -969,7 +969,7 @@ function getStage1Status(
 
     const sheet =
       ss.getSheetByName(
-        CONFIG.SHEETS.STAGE1
+        SHEETS.STAGE1
       );
 
     if (

@@ -154,6 +154,7 @@ function callGemini(prompt) {
     generationConfig: {
       temperature:     CONFIG.GEMINI.TEMPERATURE,
       maxOutputTokens: CONFIG.GEMINI.MAX_TOKENS,
+      thinkingConfig:  { thinkingBudget: 0 },
     },
   };
 
@@ -247,118 +248,6 @@ function callGeminiWithRetry(prompt) {
 
     // Exhausted retries
     Logger.log(`callGeminiWithRetry: exhausted ${maxRetries} retries. Returning null.`);
-    return null;
-  }
-
-  return null;
-}
-
-
-// ============================================================
-// callGeminiNoThink — Gemini call with thinking disabled
-// Use for batch JSON tasks where output token budget matters.
-// Identical to callGemini but adds thinkingConfig: budget 0.
-// Drop this into ai.gs alongside callGemini.
-// ============================================================
-
-function callGeminiNoThink(prompt) {
-  const url = CONFIG.GEMINI.ENDPOINT + "?key=" + CONFIG.KEYS.GEMINI;
-
-  const payload = {
-    contents: [
-      {
-        parts: [{ text: prompt }],
-      },
-    ],
-    generationConfig: {
-      temperature:     CONFIG.GEMINI.TEMPERATURE,
-      maxOutputTokens: CONFIG.GEMINI.MAX_TOKENS,
-      thinkingConfig: {
-        thinkingBudget: 0
-      },
-    },
-  };
-
-  const options = {
-    method:             "post",
-    contentType:        "application/json",
-    payload:            JSON.stringify(payload),
-    muteHttpExceptions: true,
-  };
-
-  let rawText = null;
-
-  try {
-    Logger.log(`callGemini: sending request to Gemini`);
-    const response = UrlFetchApp.fetch(url, options);
-    const code     = response.getResponseCode();
-
-    if (code !== 200) {
-      Logger.log(`callGeminiNoThink: HTTP ${code}`);
-      Logger.log(response.getContentText());
-      rateLimit("GEMINI");
-      return { error: true, code: code };
-    }
-
-    const data = JSON.parse(response.getContentText());
-    rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-
-    if (!rawText) {
-      Logger.log("callGeminiNoThink: response parsed but text content empty");
-    } else {
-      Logger.log(`callGeminiNoThink: OK (${rawText.length} chars)`);
-    }
-
-  } catch (e) {
-    Logger.log(`callGeminiNoThink: exception: ${e.message}`);
-    rateLimit("GEMINI");
-    return { error: true, code: "TIMEOUT", message: e.message };
-  }
-
-  rateLimit("GEMINI");
-  return rawText;
-}
-
-
-// ============================================================
-// callGeminiNoThinkWithRetry — retry wrapper for the above
-// Identical logic to callGeminiWithRetry but calls
-// callGeminiNoThink instead of callGemini.
-// ============================================================
-
-function callGeminiNoThinkWithRetry(prompt) {
-  const retrySleeps = CONFIG.BATCH.RETRY_SLEEPS;
-  const maxRetries  = CONFIG.BATCH.MAX_RETRIES;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const result = callGeminiNoThink(prompt);
-
-    if (typeof result === "string" && result.length > 0) {
-      return result;
-    }
-
-    if (result === null) {
-      Logger.log("callGeminiNoThinkWithRetry: empty response, not retrying.");
-      return null;
-    }
-
-    if (result && result.error) {
-      const errorType = getHttpErrorType(result.code);
-
-      if (errorType === "BAD_REQUEST" || errorType === "UNKNOWN") {
-        Logger.log(`callGeminiNoThinkWithRetry: ${errorType} (${result.code}), not retrying.`);
-        return null;
-      }
-
-      if (attempt < maxRetries) {
-        const sleepMs = retrySleeps[attempt] || 20000;
-        Logger.log(`callGeminiNoThinkWithRetry: ${errorType} (${result.code}), attempt ${attempt + 1}/${maxRetries}. Waiting ${sleepMs}ms...`);
-        Utilities.sleep(sleepMs);
-        continue;
-      }
-    }
-
-    Logger.log(`callGeminiNoThinkWithRetry: exhausted ${maxRetries} retries. Returning null.`);
     return null;
   }
 
@@ -470,7 +359,7 @@ function inferRevenueWithGeminiHelper(
 
     const prompt =
       buildPrompt(
-        "REVENUE",
+        "REVENUE_SINGLE",
         companyName,
         evidenceText
       );

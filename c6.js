@@ -35,6 +35,8 @@ function runC6(companyObj) {
 
   if (combinedEvidence.length < 50) {
     Logger.log(`C6: no evidence at all for "${company}" — scoring 0`);
+    EventLog.warn(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c6', 'OK',
+      'C6: 0/20 — no search evidence found');
     return { c6: 0, c6Signals: "No search evidence found", c6Confidence: "Low" };
   }
 
@@ -47,6 +49,8 @@ function runC6(companyObj) {
     const c6Confidence = getC6Confidence(totalStrength);
     const c6Signals    = buildC6SignalString(firedSignals);
     Logger.log(`C6: "${company}" → deterministic strong (${totalStrength}) → score=${c6Score}`);
+    EventLog.info(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c6', 'OK',
+      'C6: ' + c6Score + '/20 — ' + totalStrength + ' signals (deterministic): ' + c6Signals);
     return { c6: c6Score, c6Signals, c6Confidence };
   }
 
@@ -55,7 +59,7 @@ function runC6(companyObj) {
   Logger.log(`C6: "${company}" → deterministic weak (${totalStrength}), calling Gemini`);
 
   const evidenceTrimmed = combinedEvidence.substring(0, 2000);
-  const prompt = CONFIG.PROMPTS.C6.replace("{evidence}", evidenceTrimmed);
+  const prompt = PROMPTS.C6.replace("{evidence}", evidenceTrimmed);
   const raw    = callGeminiWithRetry(prompt);
 
   if (!raw) {
@@ -63,6 +67,8 @@ function runC6(companyObj) {
     const c6Score      = getC6Score(totalStrength);
     const c6Confidence = getC6Confidence(totalStrength);
     const c6Signals    = buildC6SignalString(firedSignals) || "No signals detected";
+    EventLog.warn(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c6', 'OK',
+      'C6: ' + c6Score + '/20 — Gemini null, used deterministic fallback: ' + c6Signals);
     return { c6: c6Score, c6Signals, c6Confidence };
   }
 
@@ -104,6 +110,8 @@ function runC6(companyObj) {
   Logger.log(`C6: "${company}" → merged strength=${mergedStrength}, score=${c6Score}`);
   Logger.log(`C6: deterministic=${deterministicNames.join(",") || "none"} | gemini=${geminiOnly.join(",") || "none"}`);
   if (reasonNote) Logger.log(`C6: Gemini note: ${reasonNote}`);
+  EventLog.info(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c6', 'OK',
+    'C6: ' + c6Score + '/20 — ' + mergedStrength + ' signals (merged): ' + c6Signals);
 
   return { c6: c6Score, c6Signals, c6Confidence };
 }

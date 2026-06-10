@@ -271,7 +271,7 @@ function inferRevenueBatchGemini(companyObjects) {
     return `${idx + 1}. Company: ${obj.company}\nEvidence: ${evidence || "No evidence available"}`;
   }).join("\n\n");
 
-  const prompt = CONFIG.PROMPTS.REVENUE_BATCH.replace("{companies_block}", companiesBlock);
+  const prompt = PROMPTS.REVENUE_BATCH.replace("{companies_block}", companiesBlock);
   Logger.log(`[inferRevenueBatchGemini] Prompt length: ${prompt.length} chars`);
 
   let raw = null;
@@ -408,7 +408,7 @@ function inferRevenueWithGemini(companyName, evidenceText) {
       };
     }
 
-    const prompt   = buildPrompt("REVENUE", companyName, evidenceText);
+    const prompt   = buildPrompt("REVENUE_SINGLE", companyName, evidenceText);
     const response = callGeminiWithRetry(prompt);
     Utilities.sleep(CONFIG.BATCH.GEMINI_SLEEP);
 
@@ -466,7 +466,7 @@ function inferRevenueWithGeminiHelper(companyName, evidenceText) {
   try {
     Logger.log(`[inferRevenueWithGeminiHelper START] ${companyName}`);
 
-    const prompt  = buildPrompt("REVENUE", companyName, evidenceText);
+    const prompt  = buildPrompt("REVENUE_SINGLE", companyName, evidenceText);
     const raw     = callGeminiWithRetry(prompt);
     if (!raw) return null;
 

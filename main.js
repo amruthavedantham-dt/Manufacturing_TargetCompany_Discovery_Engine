@@ -7,7 +7,37 @@
 // ============================================================
 // SECTION 1 — GLOBALS
 // ============================================================
-var START_TIME = null;
+var START_TIME        = null;
+var CURRENT_RUN_ID    = null;
+var PENDING_QUEUE_KEY = 'PENDING_QUEUE';
+
+function makeRunId_(prefix) {
+  return prefix + '-' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MMdd-HHmm');
+}
+
+// Persist pending company names to PropertiesService after every push.
+// Snippets are not stored — they are retrieved from SEARCH_CACHE on reload.
+function savePendingQueue_(pending) {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      PENDING_QUEUE_KEY,
+      JSON.stringify(pending.map(p => ({
+        company: p.company,
+        website: (p.companyObj && p.companyObj.website) || '',
+        source:  (p.companyObj && p.companyObj.source)  || '',
+      })))
+    );
+  } catch (e) {
+    Logger.log('[savePendingQueue ERROR] ' + e.message);
+  }
+}
+
+// Clear the persisted queue after every successful flush.
+function clearPendingQueue_() {
+  try {
+    PropertiesService.getScriptProperties().deleteProperty(PENDING_QUEUE_KEY);
+  } catch (e) {}
+}
 
 // ============================================================
 // SECTION 2 — TIME LIMIT GUARD
@@ -66,9 +96,9 @@ function runManufacturingGate(company) {
     let failReason = "No manufacturing signal found";
     if (croHit)      failReason = `CRO/service detected: ${croHit}`;
     else if (traderHit) failReason = `Trader/distributor only — no manufacturing signal: ${traderHit}`;
-    return { pass: false, failReason };
+    return { pass: false, failReason, keyword: null };
   }
-  return { pass: true, failReason: "" };
+  return { pass: true, failReason: "", keyword: manufacturerHit };
 }
 
 // ── Gate 3 helper — called from runStage1 and resolveGeminiBatch ──
@@ -85,7 +115,9 @@ function runAcquiredGate(company) {
 
 function runStage1(companyObj) {
   const company = cleanCompanyName(companyObj.company);
+  const website = companyObj.website || '';
   Logger.log(`[Stage1 START] ${company}`);
+  EventLog.info(CURRENT_RUN_ID, company, website, 's1-start', '-', 'Entering Stage 1');
 
   // ── Gate 1: Revenue ───────────────────────────────────────
   // Step 1a — dedicated Tofler/Zauba/Screener search
@@ -104,15 +136,25 @@ function runStage1(companyObj) {
 
     if (signalText.length > 50) {
       revenueBand = extractDirectRevenue(signalText);
+      if (revenueBand) {
+        EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l1', 'OK',
+          'Revenue via signals search: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
+      }
     }
 
     if (!revenueBand && combinedEvidence.length > 50) {
       const heuristic = employeeHeuristic(combinedEvidence);
-      if (heuristic) revenueBand = heuristic;
+      if (heuristic) {
+        revenueBand = heuristic;
+        EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l2', 'OK',
+          'Revenue via employee heuristic: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
+      }
     }
 
     if (!revenueBand && combinedEvidence.length > 50) {
       Logger.log(`[Gate1 PENDING GEMINI] ${company}`);
+      EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l3', 'PENDING',
+        'No direct or heuristic revenue signal — queued for Gemini batch');
       return {
         manufacturer: false,
         acquired:     false,
@@ -124,6 +166,8 @@ function runStage1(companyObj) {
 
     if (!revenueBand) {
       Logger.log(`[Gate1 No evidence] ${company}`);
+      EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate1', 'FAIL',
+        'No revenue evidence found — insufficient search results');
       return {
         manufacturer: false,
         acquired:     false,
@@ -132,10 +176,15 @@ function runStage1(companyObj) {
         failReason:   "No revenue evidence found",
       };
     }
+  } else {
+    EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l1', 'OK',
+      'Revenue via direct search: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
   }
 
   if (!CONFIG.PIPELINE.STAGE1_PASS_BANDS.includes(revenueBand.band)) {
     Logger.log(`[Gate1 FAIL] ${company} → ${revenueBand.band}`);
+    EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate1', 'FAIL',
+      'Revenue band out of range: ' + revenueBand.band);
     return {
       manufacturer: false,
       acquired:     false,
@@ -145,11 +194,14 @@ function runStage1(companyObj) {
     };
   }
   Logger.log(`[Gate1 PASS] ${company} → ${revenueBand.band}`);
+  EventLog.info(CURRENT_RUN_ID, company, website, 's1-gate1', 'PASS',
+    'Revenue band accepted: ' + revenueBand.band + ' | Evidence: ' + (revenueBand.evidence || '').slice(0, 120));
 
   // ── Gate 2: Manufacturer ──────────────────────────────────
   const mfgResult = runManufacturingGate(company);
   if (!mfgResult.pass) {
     Logger.log(`[Gate2 FAIL] ${company} — ${mfgResult.failReason}`);
+    EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate2', 'FAIL', mfgResult.failReason);
     return {
       manufacturer: false,
       acquired:     false,
@@ -159,11 +211,15 @@ function runStage1(companyObj) {
     };
   }
   Logger.log(`[Gate2 PASS] ${company}`);
+  EventLog.info(CURRENT_RUN_ID, company, website, 's1-gate2', 'PASS',
+    'Manufacturer signal confirmed' + (mfgResult.keyword ? ': "' + mfgResult.keyword + '"' : ''));
 
   // ── Gate 3: PE / Acquired ─────────────────────────────────
   const acqResult = runAcquiredGate(company);
   if (acqResult.acquired) {
     Logger.log(`[Gate3 FAIL] ${company} — PE/acquired: ${acqResult.peHit}`);
+    EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate3', 'FAIL',
+      'PE/acquisition detected: "' + acqResult.peHit + '"');
     return {
       manufacturer: true,
       acquired:     true,
@@ -173,6 +229,8 @@ function runStage1(companyObj) {
     };
   }
   Logger.log(`[Gate3 PASS] ${company}`);
+  EventLog.info(CURRENT_RUN_ID, company, website, 's1-gate3', 'PASS',
+    'No acquisition signal found');
 
   return {
     manufacturer: true,
@@ -191,6 +249,15 @@ function processCompanyStage1(companyObj) {
     const result = runStage1(companyObj);
     writeStage1Result(companyObj, result);
     Logger.log(`[Stage1 ${result.status}] ${companyObj.company}`);
+    if (result.status !== 'PENDING_REVENUE') {
+      const level = result.status === 'PASS' ? 'info' : 'warn';
+      EventLog[level](CURRENT_RUN_ID, companyObj.company, companyObj.website || '', 's1-done',
+        result.status,
+        result.status === 'PASS'
+          ? 'Stage 1 PASS — revenue: ' + (result.revenueBand && result.revenueBand.band || '')
+          : 'Stage 1 ' + result.status + (result.failReason ? ' — ' + result.failReason : '')
+      );
+    }
     return {
       success:      true,
       company:      companyObj.company,
@@ -198,6 +265,8 @@ function processCompanyStage1(companyObj) {
     };
   } catch (err) {
     Logger.log(`[processCompanyStage1 ERROR] ${companyObj.company} | ${err.message}`);
+    EventLog.error(CURRENT_RUN_ID, companyObj.company, companyObj.website || '', 's1-done', 'ERROR',
+      'Unhandled exception: ' + err.message);
     flagForReview(companyObj, err.message);
     return {
       success:      false,
@@ -208,14 +277,54 @@ function processCompanyStage1(companyObj) {
 }
 
 // ============================================================
+// SECTION 5B — DRAIN LEFTOVER PENDING REVENUE
+// Scans STAGE1 for any PENDING_REVENUE rows left by a previous
+// crashed run (crash before flush) and resolves them via Gemini.
+// Called at the top of runInitialPipeline before the main loop.
+// ============================================================
+function drainPendingRevenue() {
+  try {
+    const ss    = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEETS.STAGE1);
+    if (!sheet || sheet.getLastRow() < 2) return [];
+
+    const data     = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+    const leftover = [];
+
+    data.forEach(row => {
+      const company = String(row[0] || '').trim();
+      const status  = String(row[8] || '').trim();
+      if (!company || status !== 'PENDING_REVENUE') return;
+
+      const cleanName = cleanCompanyName(company);
+      leftover.push({
+        companyObj:     { company, website: String(row[1] || ''), source: String(row[2] || '') },
+        company:        cleanName,
+        directSnippet:  getCachedSearch(cleanName, 'REVENUE_DIRECT')  || '',
+        signalsSnippet: getCachedSearch(cleanName, 'REVENUE_SIGNALS') || '',
+        rowNum:         null,
+      });
+    });
+
+    return leftover;
+  } catch (err) {
+    Logger.log(`[drainPendingRevenue ERROR] ${err.message}`);
+    return [];
+  }
+}
+
+// ============================================================
 // SECTION 6 — INITIAL PIPELINE
 // Runs Stage 1 for all companies
 // Gemini batch resolution happens inline — no separate step needed
 // Run this first. Then run runFinalScoringPipeline.
 // ============================================================
 function runInitialPipeline() {
-  START_TIME = new Date();
+  START_TIME     = new Date();
+  CURRENT_RUN_ID = makeRunId_('S1');
   Logger.log(`=== runInitialPipeline START ===`);
+
+  let pending = []; // declared outside try so catch can flush it on fatal error
 
   try {
     const companies = getCompanies();
@@ -224,13 +333,26 @@ function runInitialPipeline() {
       return;
     }
 
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-run-start', 'OK',
+      'Stage 1 started — ' + companies.length + ' companies in queue');
+
+    // ── Drain any PENDING_REVENUE left by a previous crash ───
+    const leftover = drainPendingRevenue();
+    if (leftover.length) {
+      Logger.log(`[runInitialPipeline] Draining ${leftover.length} leftover PENDING_REVENUE companies`);
+      EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-drain', '-',
+        'Found ' + leftover.length + ' PENDING_REVENUE rows from previous run — resolving now');
+      resolveGeminiBatch(leftover);
+    }
+
     const checkpoint = getCheckpoint();
     Logger.log(`[Checkpoint] Starting from index ${checkpoint} of ${companies.length} total`);
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-checkpoint', '-',
+      'Resuming from index ' + checkpoint + ' of ' + companies.length);
 
     let processed = 0;
     let skipped   = 0;
     let failed    = 0;
-    let pending   = []; // companies needing Gemini batch
 
     for (let i = checkpoint; i < companies.length; i++) {
 
@@ -240,9 +362,12 @@ function runInitialPipeline() {
           Logger.log(`[Time limit] Flushing ${pending.length} pending before pause`);
           resolveGeminiBatch(pending);
           pending = [];
+          clearPendingQueue_();
         }
         saveCheckpoint(i);
         Logger.log(`[runInitialPipeline PAUSED] Checkpoint saved at ${i} — re-run to continue`);
+        EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-checkpoint', '-',
+          'Time limit hit — pausing at index ' + i + ' of ' + companies.length + ', checkpoint saved');
         return;
       }
 
@@ -281,6 +406,7 @@ function runInitialPipeline() {
             signalsSnippet: getCachedSearch(company, "REVENUE_SIGNALS") || "",
             rowNum:         null, // resolved inside resolveGeminiBatch
           });
+          savePendingQueue_(pending);
           Logger.log(`[${i + 1}/${companies.length}] PENDING — queued for Gemini (queue size: ${pending.length})`);
         } else if (result.success) {
           processed++;
@@ -296,9 +422,12 @@ function runInitialPipeline() {
       // ── Flush Gemini queue every 10 ───────────────────────
       if (pending.length >= 10) {
         Logger.log(`[Gemini Flush] Queue reached 10 — sending batch`);
+        EventLog.info(CURRENT_RUN_ID, '', '', 'sys-gemini-flush', '-',
+          'Gemini batch fired — 10 companies pending revenue resolution');
         resolveGeminiBatch(pending);
         processed += pending.length;
         pending = [];
+        clearPendingQueue_();
       }
 
       saveCheckpoint(i + 1);
@@ -307,8 +436,11 @@ function runInitialPipeline() {
     // ── Flush any remaining pending (less than 10) ────────
     if (pending.length) {
       Logger.log(`[Gemini Flush] Final batch of ${pending.length} companies`);
+      EventLog.info(CURRENT_RUN_ID, '', '', 'sys-gemini-flush', '-',
+        'Final Gemini batch — ' + pending.length + ' companies pending revenue resolution');
       resolveGeminiBatch(pending);
       processed += pending.length;
+      clearPendingQueue_();
     }
 
     saveCheckpoint(0); // reset for next full run
@@ -316,9 +448,24 @@ function runInitialPipeline() {
     Logger.log(`[Processed] ${processed}`);
     Logger.log(`[Skipped]   ${skipped}`);
     Logger.log(`[Failed]    ${failed}`);
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-run-complete', 'OK',
+      'Stage 1 complete — processed ' + processed + ', skipped ' + skipped + ', failed ' + failed);
 
   } catch (err) {
     Logger.log(`[runInitialPipeline FATAL] ${err.message}`);
+    EventLog.error(CURRENT_RUN_ID, '', '', 'sys-run-start', 'ERROR',
+      'Fatal error: ' + err.message);
+    if (pending.length) {
+      Logger.log(`[runInitialPipeline FATAL] Flushing ${pending.length} pending before exit`);
+      try {
+        resolveGeminiBatch(pending);
+        clearPendingQueue_();
+      } catch (e) {
+        Logger.log(`[runInitialPipeline FATAL] Flush failed — ${pending.length} companies remain as PENDING_REVENUE and will be drained on next run: ${e.message}`);
+      }
+    } else {
+      clearPendingQueue_();
+    }
   }
 }
 
@@ -333,7 +480,7 @@ function resolveGeminiBatch(pendingQueue) {
   Logger.log(`[resolveGeminiBatch] ${pendingQueue.length} companies`);
 
   const ss    = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SHEETS.STAGE1);
+  const sheet = ss.getSheetByName(SHEETS.STAGE1);
   if (!sheet) {
     Logger.log(`[resolveGeminiBatch ERROR] STAGE1 sheet not found`);
     return;
@@ -418,6 +565,17 @@ function resolveGeminiBatch(pendingQueue) {
 
     Logger.log(`[resolveGeminiBatch] ${item.company} → ${band} → ${finalStatus}`);
 
+    const website = (item.companyObj && item.companyObj.website) || '';
+    EventLog.info(CURRENT_RUN_ID, item.company, website, 's1-revenue-gemini',
+      band === CONFIG.REVENUE.BANDS.UNKNOWN ? 'PENDING' : 'OK',
+      'Gemini resolved revenue: ' + band + ' (' + (result.confidence || 'Low') + ')');
+
+    const doneLevel = finalStatus === 'PASS' ? 'info' : 'warn';
+    EventLog[doneLevel](CURRENT_RUN_ID, item.company, website, 's1-done', finalStatus,
+      finalStatus === 'PASS'
+        ? 'Stage 1 PASS — revenue: ' + band
+        : 'Stage 1 ' + finalStatus + (finalReason ? ' — ' + finalReason : ''));
+
     updateStage1Revenue(sheet, item.rowNum, {
       band:       band,
       confidence: result.confidence || CONFIG.REVENUE.CONFIDENCE.LOW,
@@ -489,13 +647,18 @@ function runInitialPipelineTest() {
 // Only scores companies with Stage1 status = PASS
 // ============================================================
 function runFinalScoringPipeline() {
-  START_TIME = new Date();
+  START_TIME     = new Date();
+  CURRENT_RUN_ID = makeRunId_('SC');
   Logger.log(`=== runFinalScoringPipeline START ===`);
 
   try {
     const companies  = getPassedCompanies();
     const checkpoint = getCheckpoint();
     Logger.log(`[Scoring Checkpoint] Resuming from index ${checkpoint}`);
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-run-start', 'OK',
+      'Scoring pipeline started — ' + companies.length + ' passed companies');
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-checkpoint', '-',
+      'Resuming from index ' + checkpoint + ' of ' + companies.length);
 
     let processed = 0;
     let skipped   = 0;
@@ -505,6 +668,8 @@ function runFinalScoringPipeline() {
       if (isNearTimeLimit()) {
         saveCheckpoint(i);
         Logger.log(`[runFinalScoringPipeline PAUSED] Checkpoint saved at ${i}`);
+        EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-checkpoint', '-',
+          'Time limit hit — pausing scoring at index ' + i + ', checkpoint saved');
         return;
       }
 
@@ -525,11 +690,21 @@ function runFinalScoringPipeline() {
       }
 
       Logger.log(`[Scoring ${i + 1}/${companies.length}] ${companyObj.company}`);
+      EventLog.info(CURRENT_RUN_ID, companyObj.company, companyObj.website || '', 'sc-start', '-',
+        'Entering scoring pipeline (' + (i + 1) + '/' + companies.length + ')');
 
       try {
         const c3 = runC3(companyObj);
         const c4 = runC4(companyObj);
-        const c5 = runC5(companyObj);
+
+        const c5QueryPriority = ["STAGE1_MFG", "C3", "STAGE1_BIZ"];
+        let c5Snippets = null;
+        for (const qt of c5QueryPriority) {
+          c5Snippets = getCachedSearch(companyObj.company, qt);
+          if (c5Snippets && c5Snippets.trim().length >= 50) break;
+        }
+        const c5 = runC5(companyObj, c5Snippets);
+
         const c6 = runC6(companyObj);
 
         const finalScore =
@@ -563,21 +738,33 @@ function runFinalScoringPipeline() {
           bandLabel:    bandResult.label,
         });
 
+        EventLog.info(CURRENT_RUN_ID, companyObj.company, companyObj.website || '', 'sc-done',
+          'Band_' + bandResult.band,
+          'Final score ' + finalScore + '/100 — Band ' + bandResult.band + ': ' + bandResult.label +
+          ' | C3=' + (c3.c3||0) + ' C4=' + (c4.c4||0) + ' C5=' + (c5.c5||0) + ' C6=' + (c6.c6||0));
+
         processed++;
       } catch (err) {
         Logger.log(`[runFinalScoringPipeline ERROR] ${companyObj.company} | ${err.message}`);
+        EventLog.error(CURRENT_RUN_ID, companyObj.company, companyObj.website || '', 'sc-done', 'ERROR',
+          'Unhandled scoring exception: ' + err.message);
       }
 
       saveCheckpoint(i + 1);
     }
 
     Logger.log(`=== runFinalScoringPipeline COMPLETE | processed: ${processed}, skipped: ${skipped} ===`);
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-run-complete', 'OK',
+      'Scoring complete — processed ' + processed + ', skipped ' + skipped);
     // Auto-build shortlist after scoring completes
     Logger.log(`[runFinalScoringPipeline] Building shortlist...`);
     buildShortlist();
+    EventLog.info(CURRENT_RUN_ID, '', '', 'sys-shortlist', 'OK', 'Shortlist built');
 
   } catch (err) {
     Logger.log(`[runFinalScoringPipeline FATAL] ${err.message}`);
+    EventLog.error(CURRENT_RUN_ID, '', '', 'sys-run-start', 'ERROR',
+      'Scoring pipeline fatal error: ' + err.message);
   }
 }
 
@@ -603,7 +790,15 @@ function runFinalScoringPipelineTest() {
       try {
         const c3 = runC3(companyObj);
         const c4 = runC4(companyObj);
-        const c5 = runC5(companyObj);
+
+        const c5QueryPriority = ["STAGE1_MFG", "C3", "STAGE1_BIZ"];
+        let c5Snippets = null;
+        for (const qt of c5QueryPriority) {
+          c5Snippets = getCachedSearch(companyObj.company, qt);
+          if (c5Snippets && c5Snippets.trim().length >= 50) break;
+        }
+        const c5 = runC5(companyObj, c5Snippets);
+
         const c6 = runC6(companyObj);
 
         Logger.log(`[TEST SUCCESS] ${companyObj.company}`);
@@ -661,6 +856,7 @@ function runFinalScoringPipelineTest() {
 // ============================================================
 function resetAndRunFresh() {
   resetCheckpoint();
+  clearPendingQueue_();
   PropertiesService.getScriptProperties().deleteProperty("PENDING_REVENUE_CHECKPOINT");
   Logger.log(`[resetAndRunFresh] All checkpoints cleared`);
 }
@@ -686,6 +882,93 @@ function checkState() {
   Logger.log(`Companies: ${getCompanies().length}`);
 }
 
+// ============================================================
+// testCheckpointing — verifies all 6 checkpoint requirements.
+// No API calls. Safe to run anytime.
+// ============================================================
+function testCheckpointing() {
+  Logger.log('=== testCheckpointing START ===\n');
+  let passed = 0;
+  let failed = 0;
+
+  function assert(label, condition) {
+    if (condition) {
+      Logger.log('PASS — ' + label);
+      passed++;
+    } else {
+      Logger.log('FAIL — ' + label);
+      failed++;
+    }
+  }
+
+  // ── Test 1: saveCheckpoint / getCheckpoint round-trip ─────
+  saveCheckpoint(42);
+  assert('saveCheckpoint/getCheckpoint round-trip', getCheckpoint() === 42);
+
+  // ── Test 2: pending queue written to PropertiesService ────
+  const fakePending = [
+    { company: 'Acme Corp', companyObj: { company: 'Acme Corp', website: 'acme.com', source: 'Test' }, directSnippet: '', signalsSnippet: '', rowNum: null },
+    { company: 'Beta Ltd',  companyObj: { company: 'Beta Ltd',  website: 'beta.com', source: 'Test' }, directSnippet: '', signalsSnippet: '', rowNum: null },
+  ];
+  savePendingQueue_(fakePending);
+  const stored = PropertiesService.getScriptProperties().getProperty(PENDING_QUEUE_KEY);
+  const parsed = stored ? JSON.parse(stored) : [];
+  assert('savePendingQueue_ writes 2 entries', parsed.length === 2);
+  assert('savePendingQueue_ preserves company names',
+    parsed[0].company === 'Acme Corp' && parsed[1].company === 'Beta Ltd');
+
+  // ── Test 3: clearPendingQueue_ removes the key ────────────
+  clearPendingQueue_();
+  const afterClear = PropertiesService.getScriptProperties().getProperty(PENDING_QUEUE_KEY);
+  assert('clearPendingQueue_ removes key', afterClear === null);
+
+  // ── Test 4: drainPendingRevenue finds PENDING_REVENUE rows ─
+  const ss     = SpreadsheetApp.getActiveSpreadsheet();
+  const stage1 = ss.getSheetByName(SHEETS.STAGE1);
+  if (stage1) {
+    stage1.appendRow([
+      'TEST_DRAIN_COMPANY', 'testdrain.com', 'Test',
+      'NO', 'NO', 'PENDING_REVENUE', 'Low', 'Awaiting Gemini batch',
+      'PENDING_REVENUE', '',
+    ]);
+    const leftover = drainPendingRevenue();
+    const found = leftover.some(p =>
+      p.companyObj.company === 'TEST_DRAIN_COMPANY'
+    );
+    assert('drainPendingRevenue finds injected PENDING_REVENUE row', found);
+    stage1.deleteRow(stage1.getLastRow()); // clean up test row
+    Logger.log('      (test row removed from STAGE1)');
+  } else {
+    Logger.log('SKIP — Test 4 (STAGE1 sheet missing — run setupSheets first)');
+  }
+
+  // ── Test 5: drainPendingRevenue ignores PASS / FAIL rows ──
+  if (stage1) {
+    stage1.appendRow([
+      'TEST_PASS_COMPANY', 'testpass.com', 'Test',
+      'YES', 'NO', '50-500Cr', 'High', 'Revenue found',
+      'PASS', '',
+    ]);
+    const leftover2 = drainPendingRevenue();
+    const foundPass = leftover2.some(p =>
+      p.companyObj.company === 'TEST_PASS_COMPANY'
+    );
+    assert('drainPendingRevenue ignores PASS rows', !foundPass);
+    stage1.deleteRow(stage1.getLastRow());
+    Logger.log('      (test row removed from STAGE1)');
+  }
+
+  // ── Test 6: resetAndRunFresh clears both index and queue ──
+  saveCheckpoint(99);
+  savePendingQueue_(fakePending);
+  resetAndRunFresh();
+  assert('resetAndRunFresh resets checkpoint to 0', getCheckpoint() === 0);
+  assert('resetAndRunFresh clears pending queue',
+    PropertiesService.getScriptProperties().getProperty(PENDING_QUEUE_KEY) === null);
+
+  Logger.log('\n=== RESULT: ' + passed + ' passed, ' + failed + ' failed ===');
+}
+
 
 // change if necessary
 function setCheckpointTo500() {
@@ -695,7 +978,7 @@ function setCheckpointTo500() {
 
 function getPassedCompanies() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SHEETS.STAGE1);
+  const sheet = ss.getSheetByName(SHEETS.STAGE1);
   if (!sheet || sheet.getLastRow() < 2) return [];
 
   const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();

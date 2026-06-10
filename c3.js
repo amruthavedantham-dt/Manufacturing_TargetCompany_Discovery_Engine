@@ -26,6 +26,8 @@ function runC3(companyObj) {
   // --------------------------------------------------------
   if (!snippets || snippets.trim().length < 50) {
     Logger.log(`C3: insufficient evidence for "${company}" — scoring 0`);
+    EventLog.warn(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c3', 'OK',
+      'C3: 0/25 — no search evidence found');
     return {
       c3:             0,
       c3Evidence:     "No search evidence found",
@@ -45,6 +47,8 @@ function runC3(companyObj) {
   // --------------------------------------------------------
   if (!raw) {
     Logger.log(`C3: Gemini returned null for "${company}" — flagging for review`);
+    EventLog.error(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c3', 'ERROR',
+      'C3: 0/25 — Gemini returned null, flagged for manual review');
     return {
       c3:             0,
       c3Evidence:     "Gemini call failed — manual review needed",
@@ -95,6 +99,8 @@ function runC3(companyObj) {
   Logger.log(`C3: "${company}" → weight=${totalWeight}, effective=${effectiveWeight}, score=${c3Score}`);
   Logger.log(`C3: strongCount=${strongCount}, ccPenalty=${ccPenalty}, commodityKill=${commodityKill}`);
   Logger.log(`C3: signals: ${detectedSignals.join(", ") || "none"}`);
+  EventLog.info(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c3', 'OK',
+    'C3: ' + c3Score + '/25 (' + c3Confidence + ') — ' + (detectedSignals.join(', ') || 'no signals'));
 
   return {
     c3:             c3Score,

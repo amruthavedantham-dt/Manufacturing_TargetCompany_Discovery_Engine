@@ -20,6 +20,10 @@ function runC4(companyObj) {
   Logger.log(`C4: DM name="${dmName}" | source="${nameResult.source}" | failReason="${nameResult.failReason || "ok"}"`);
 
   if (dmName === "Unknown") {
+    EventLog.warn(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c4-name', 'ERROR',
+      'DM name not found — all 3 gates failed (' + nameResult.failReason + ')');
+    EventLog.warn(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c4', 'OK',
+      'C4: 0/20 — DM name unknown, manual review needed');
     return {
       c4: 0, c4DmName: "Unknown",
       c4Background: `Name not found: ${nameResult.failReason}`,
@@ -27,6 +31,9 @@ function runC4(companyObj) {
       c4FailReason: nameResult.failReason,
     };
   }
+
+  EventLog.info(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c4-name', 'OK',
+    'DM name found via ' + nameResult.source + ': "' + dmName + '"');
 
   // ── Serper: targeted background search ───────────────────
   let bgSnippets = c4_searchPersonBackground(dmName, company);
@@ -43,6 +50,8 @@ function runC4(companyObj) {
     const strongHit = CONFIG.C4.STRONG_SIGNALS.find(kw => bgLower.includes(kw.toLowerCase()));
     if (strongHit) {
       Logger.log(`C4: deterministic Strong (keyword: "${strongHit}") — skipping Gemini depth call`);
+      EventLog.info(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c4', 'OK',
+        'C4: ' + CONFIG.C4.SCORE_MAP["Strong"] + '/20 — Strong (deterministic keyword: "' + strongHit + '")');
       return {
         c4: CONFIG.C4.SCORE_MAP["Strong"], c4DmName: dmName,
         c4Background: `Strong | keyword: "${strongHit}"`,
@@ -90,6 +99,8 @@ function runC4(companyObj) {
   const c4Confidence = getC4Confidence(depth, depthParsed, strongHit);
 
   Logger.log(`C4: "${company}" → depth=${depth}, score=${c4Score}, name=${dmName}`);
+  EventLog.info(CURRENT_RUN_ID, company, companyObj.website || '', 'sc-c4', 'OK',
+    'C4: ' + c4Score + '/20 — ' + depth + ' | DM: ' + dmName);
   return { c4: c4Score, c4DmName: dmName, c4Background, c4Confidence, manualReview: false };
 }
 
@@ -375,6 +386,8 @@ function c4_isValidName(name) {
     'OFFICER', 'EXECUTIVE', 'PARTNER', 'TRUSTEE', 'MEMBER', 'SECRETARY',
     'AUTHORIZED', 'REGISTERED', 'CORPORATE', 'BUSINESS', 'SERVICES',
     'INDUSTRIES', 'ENTERPRISE', 'TRADING', 'EXPORTS', 'IMPORTS', 'SOLUTIONS',
+    // Zauba/MCA field labels that pattern-match as names
+    'IDENTIFICATION', 'NUMBER', 'DATE', 'APPOINTMENT', 'DESIGNATION',
   ];
 
   for (const s of stopWords) {
@@ -553,13 +566,13 @@ function testC4NameExtraction() {
   Logger.log("=== testC4NameExtraction START ===");
 
   const ss    = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SHEETS.STAGE1);
+  const sheet = ss.getSheetByName(SHEETS.STAGE1);
   if (!sheet) { Logger.log("STAGE1 sheet not found"); return; }
 
   const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 9).getValues();
   const companies = data
     .filter(row => String(row[8]).trim() === "PASS")
-    .slice(0, 5)
+    .slice(0, 10)
     .map(row => ({ company: String(row[0]).trim() }));
 
   if (!companies.length) { Logger.log("No PASS companies found"); return; }
@@ -634,8 +647,8 @@ function testC4NameExtraction() {
       Logger.log(`Gate2: no results`);
     }
 
-    // ── Gate 3: General snippets + regex (Gemini SKIPPED) ───
-    Logger.log(`Gate3: general query (Gemini SKIPPED)`);
+    // ── Gate 3: General snippets → regex → Gemini ───────────
+    Logger.log(`Gate3: general query`);
     const generalSnippets = callSerper(company, "C4_GENERAL");
     if (generalSnippets && generalSnippets.length > 30) buf.push(generalSnippets);
 
@@ -645,17 +658,35 @@ function testC4NameExtraction() {
       summary.failed++;
       summary.bySource["FAIL:no_snippets"] = (summary.bySource["FAIL:no_snippets"] || 0) + 1;
     } else {
-      // Try regex on accumulated buffer before deciding Gemini is needed
+      // Try regex first — free, no token cost
       const fromSnippet = c4_extractNameFromSnippets(allSnippets, company);
       if (fromSnippet !== "Unknown") {
         Logger.log(`Gate3 DONE (snippet regex): "${fromSnippet}"`);
         summary.resolved++;
         summary.bySource["general_snippet"] = (summary.bySource["general_snippet"] || 0) + 1;
       } else {
-        Logger.log(`Gate3: regex found nothing → would need Gemini`);
-        Logger.log(`Gate3 snippet preview:\n${allSnippets.substring(0, 500)}`);
-        summary.failed++;
-        summary.bySource["needs_gemini"] = (summary.bySource["needs_gemini"] || 0) + 1;
+        // Gemini fallback — only if regex found nothing
+        Logger.log(`Gate3: regex found nothing — calling Gemini`);
+        Logger.log(`Gate3 snippet preview:\n${allSnippets.substring(0, 400)}`);
+        const namePrompt = buildPrompt("C4_NAME", company, allSnippets);
+        const nameRaw    = callGeminiWithRetry(namePrompt);
+        if (!nameRaw) {
+          Logger.log(`Gate3: Gemini null`);
+          summary.failed++;
+          summary.bySource["FAIL:gemini_null"] = (summary.bySource["FAIL:gemini_null"] || 0) + 1;
+        } else {
+          const nameParsed = parseGeminiJSON(nameRaw);
+          const dmName     = nameParsed ? String(nameParsed.name || "Unknown").trim() : "Unknown";
+          if (!dmName || dmName === "Unknown" || dmName.toLowerCase() === "null") {
+            Logger.log(`Gate3: Gemini returned Unknown`);
+            summary.failed++;
+            summary.bySource["FAIL:gemini_unknown"] = (summary.bySource["FAIL:gemini_unknown"] || 0) + 1;
+          } else {
+            Logger.log(`Gate3 DONE (Gemini): "${dmName}"`);
+            summary.resolved++;
+            summary.bySource["gemini"] = (summary.bySource["gemini"] || 0) + 1;
+          }
+        }
       }
     }
   });
