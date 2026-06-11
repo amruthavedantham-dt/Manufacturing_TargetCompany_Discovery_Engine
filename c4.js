@@ -569,9 +569,9 @@ function testC4NameExtraction() {
   const sheet = ss.getSheetByName(SHEETS.STAGE1);
   if (!sheet) { Logger.log("STAGE1 sheet not found"); return; }
 
-  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 9).getValues();
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getValues();
   const companies = data
-    .filter(row => String(row[8]).trim() === "PASS")
+    .filter(row => String(row[9]).trim() === "PASS")
     .slice(0, 10)
     .map(row => ({ company: String(row[0]).trim() }));
 

@@ -71,182 +71,19 @@ function cleanCompanyName(rawName) {
 
 // ============================================================
 // SECTION 4 — STAGE 1 GATES
-// Gate 1: Revenue — direct search → signals → heuristic → PENDING for Gemini
-// Gate 2: Manufacturer check
-// Gate 3: PE/Acquired check
+// Moved to pipeline.js:
+//   runManufacturingGate()   Gate 2
+//   runAcquiredGate()        Gate 3
+//   runPostRevenueGates()    Gate 2+3 combined (shared by direct + Gemini paths)
+//   runCompany()             Full Gate 1→2→3 per-company flow
 // ============================================================
-
-// ── Gate 2 helper — called from runStage1 and resolveGeminiBatch ──
-function runManufacturingGate(company) {
-  const mfgSnippets = callSerper(company, "STAGE1_MFG");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
-  const mfgText = String(mfgSnippets || "").toLowerCase();
-
-  const manufacturerHit = CONFIG.STAGE1.MANUFACTURING.find(kw =>
-    mfgText.includes(kw.toLowerCase())
-  );
-  const traderHit = CONFIG.STAGE1.TRADER.find(kw =>
-    mfgText.includes(kw.toLowerCase())
-  );
-  const croHit = CONFIG.STAGE1.CRO.find(kw =>
-    mfgText.includes(kw.toLowerCase())
-  );
-
-  if (!manufacturerHit || croHit) {
-    let failReason = "No manufacturing signal found";
-    if (croHit)      failReason = `CRO/service detected: ${croHit}`;
-    else if (traderHit) failReason = `Trader/distributor only — no manufacturing signal: ${traderHit}`;
-    return { pass: false, failReason, keyword: null };
-  }
-  return { pass: true, failReason: "", keyword: manufacturerHit };
-}
-
-// ── Gate 3 helper — called from runStage1 and resolveGeminiBatch ──
-function runAcquiredGate(company) {
-  const bizSnippets = callSerper(company, "STAGE1_BIZ");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
-  const bizText = String(bizSnippets || "").toLowerCase();
-
-  const peHit = CONFIG.STAGE1.PE_ACQUIRED.find(kw =>
-    bizText.includes(kw.toLowerCase())
-  );
-  return { acquired: !!peHit, peHit: peHit || null };
-}
-
-function runStage1(companyObj) {
-  const company = cleanCompanyName(companyObj.company);
-  const website = companyObj.website || '';
-  Logger.log(`[Stage1 START] ${company}`);
-  EventLog.info(CURRENT_RUN_ID, company, website, 's1-start', '-', 'Entering Stage 1');
-
-  // ── Gate 1: Revenue ───────────────────────────────────────
-  // Step 1a — dedicated Tofler/Zauba/Screener search
-  const directSnippets = callSerper(company, "REVENUE_DIRECT");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
-  const directText = String(directSnippets || "");
-
-  let revenueBand = extractDirectRevenue(directText);
-
-  if (!revenueBand) {
-    // Step 1b — signals search
-    const signalSnippets = callSerper(company, "REVENUE_SIGNALS");
-    Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
-    const signalText      = String(signalSnippets || "").trim();
-    const combinedEvidence = (directText + " " + signalText).trim();
-
-    if (signalText.length > 50) {
-      revenueBand = extractDirectRevenue(signalText);
-      if (revenueBand) {
-        EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l1', 'OK',
-          'Revenue via signals search: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
-      }
-    }
-
-    if (!revenueBand && combinedEvidence.length > 50) {
-      const heuristic = employeeHeuristic(combinedEvidence);
-      if (heuristic) {
-        revenueBand = heuristic;
-        EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l2', 'OK',
-          'Revenue via employee heuristic: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
-      }
-    }
-
-    if (!revenueBand && combinedEvidence.length > 50) {
-      Logger.log(`[Gate1 PENDING GEMINI] ${company}`);
-      EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l3', 'PENDING',
-        'No direct or heuristic revenue signal — queued for Gemini batch');
-      return {
-        manufacturer: false,
-        acquired:     false,
-        revenueBand:  { band: "PENDING_REVENUE", confidence: "Low", evidence: "Awaiting Gemini batch" },
-        status:       "PENDING_REVENUE",
-        failReason:   "",
-      };
-    }
-
-    if (!revenueBand) {
-      Logger.log(`[Gate1 No evidence] ${company}`);
-      EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate1', 'FAIL',
-        'No revenue evidence found — insufficient search results');
-      return {
-        manufacturer: false,
-        acquired:     false,
-        revenueBand:  { band: "Unknown", confidence: "Low", evidence: "No revenue evidence found" },
-        status:       "FAIL",
-        failReason:   "No revenue evidence found",
-      };
-    }
-  } else {
-    EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l1', 'OK',
-      'Revenue via direct search: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
-  }
-
-  if (!CONFIG.PIPELINE.STAGE1_PASS_BANDS.includes(revenueBand.band)) {
-    Logger.log(`[Gate1 FAIL] ${company} → ${revenueBand.band}`);
-    EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate1', 'FAIL',
-      'Revenue band out of range: ' + revenueBand.band);
-    return {
-      manufacturer: false,
-      acquired:     false,
-      revenueBand:  revenueBand,
-      status:       "FAIL",
-      failReason:   `Revenue band rejected: ${revenueBand.band}`,
-    };
-  }
-  Logger.log(`[Gate1 PASS] ${company} → ${revenueBand.band}`);
-  EventLog.info(CURRENT_RUN_ID, company, website, 's1-gate1', 'PASS',
-    'Revenue band accepted: ' + revenueBand.band + ' | Evidence: ' + (revenueBand.evidence || '').slice(0, 120));
-
-  // ── Gate 2: Manufacturer ──────────────────────────────────
-  const mfgResult = runManufacturingGate(company);
-  if (!mfgResult.pass) {
-    Logger.log(`[Gate2 FAIL] ${company} — ${mfgResult.failReason}`);
-    EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate2', 'FAIL', mfgResult.failReason);
-    return {
-      manufacturer: false,
-      acquired:     false,
-      revenueBand:  revenueBand,
-      status:       "FAIL",
-      failReason:   mfgResult.failReason,
-    };
-  }
-  Logger.log(`[Gate2 PASS] ${company}`);
-  EventLog.info(CURRENT_RUN_ID, company, website, 's1-gate2', 'PASS',
-    'Manufacturer signal confirmed' + (mfgResult.keyword ? ': "' + mfgResult.keyword + '"' : ''));
-
-  // ── Gate 3: PE / Acquired ─────────────────────────────────
-  const acqResult = runAcquiredGate(company);
-  if (acqResult.acquired) {
-    Logger.log(`[Gate3 FAIL] ${company} — PE/acquired: ${acqResult.peHit}`);
-    EventLog.warn(CURRENT_RUN_ID, company, website, 's1-gate3', 'FAIL',
-      'PE/acquisition detected: "' + acqResult.peHit + '"');
-    return {
-      manufacturer: true,
-      acquired:     true,
-      revenueBand:  revenueBand,
-      status:       "FAIL",
-      failReason:   `PE/acquired detected: ${acqResult.peHit}`,
-    };
-  }
-  Logger.log(`[Gate3 PASS] ${company}`);
-  EventLog.info(CURRENT_RUN_ID, company, website, 's1-gate3', 'PASS',
-    'No acquisition signal found');
-
-  return {
-    manufacturer: true,
-    acquired:     false,
-    revenueBand:  revenueBand,
-    status:       "PASS",
-    failReason:   "",
-  };
-}
 
 // ============================================================
 // SECTION 5 — PROCESS ONE COMPANY
 // ============================================================
 function processCompanyStage1(companyObj) {
   try {
-    const result = runStage1(companyObj);
+    const result = runCompany(companyObj);
     writeStage1Result(companyObj, result);
     Logger.log(`[Stage1 ${result.status}] ${companyObj.company}`);
     if (result.status !== 'PENDING_REVENUE') {
@@ -288,12 +125,12 @@ function drainPendingRevenue() {
     const sheet = ss.getSheetByName(SHEETS.STAGE1);
     if (!sheet || sheet.getLastRow() < 2) return [];
 
-    const data     = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+    const data     = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getValues();
     const leftover = [];
 
     data.forEach(row => {
       const company = String(row[0] || '').trim();
-      const status  = String(row[8] || '').trim();
+      const status  = String(row[9] || '').trim();
       if (!company || status !== 'PENDING_REVENUE') return;
 
       const cleanName = cleanCompanyName(company);
@@ -322,6 +159,7 @@ function drainPendingRevenue() {
 function runInitialPipeline() {
   START_TIME     = new Date();
   CURRENT_RUN_ID = makeRunId_('S1');
+  batchFailuresInit_(CURRENT_RUN_ID);
   Logger.log(`=== runInitialPipeline START ===`);
 
   let pending = []; // declared outside try so catch can flush it on fatal error
@@ -513,7 +351,8 @@ function resolveGeminiBatch(pendingQueue) {
       return;
     }
 
-    const band = result.band || CONFIG.REVENUE.BANDS.UNKNOWN;
+    const band    = result.band || CONFIG.REVENUE.BANDS.UNKNOWN;
+    const website = (item.companyObj && item.companyObj.website) || '';
 
     let finalStatus      = "FAIL";
     let finalReason      = `Revenue band rejected: ${band}`;
@@ -541,31 +380,14 @@ function resolveGeminiBatch(pendingQueue) {
       }
 
     } else if (CONFIG.PIPELINE.STAGE1_PASS_BANDS.includes(band)) {
-      // Revenue passed — run Gate 2 (Manufacturing) then Gate 3 (Acquired)
-      const mfgResult = runManufacturingGate(item.company);
-      if (!mfgResult.pass) {
-        finalStatus = "FAIL";
-        finalReason = mfgResult.failReason;
-        Logger.log(`[resolveGeminiBatch Gate2 FAIL] ${item.company} — ${mfgResult.failReason}`);
-      } else {
-        manufacturerFlag = "YES";
-        const acqResult = runAcquiredGate(item.company);
-        if (acqResult.acquired) {
-          finalStatus  = "FAIL";
-          finalReason  = `PE/acquired detected: ${acqResult.peHit}`;
-          acquiredFlag = "YES";
-          Logger.log(`[resolveGeminiBatch Gate3 FAIL] ${item.company} — PE: ${acqResult.peHit}`);
-        } else {
-          finalStatus = "PASS";
-          finalReason = "";
-          Logger.log(`[resolveGeminiBatch Gate3 PASS] ${item.company}`);
-        }
-      }
+      const gateResult = runPostRevenueGates(item.company, website);
+      finalStatus      = gateResult.status;
+      finalReason      = gateResult.failReason;
+      manufacturerFlag = gateResult.manufacturer ? "YES" : "NO";
+      acquiredFlag     = gateResult.acquired     ? "YES" : "NO";
     }
 
     Logger.log(`[resolveGeminiBatch] ${item.company} → ${band} → ${finalStatus}`);
-
-    const website = (item.companyObj && item.companyObj.website) || '';
     EventLog.info(CURRENT_RUN_ID, item.company, website, 's1-revenue-gemini',
       band === CONFIG.REVENUE.BANDS.UNKNOWN ? 'PENDING' : 'OK',
       'Gemini resolved revenue: ' + band + ' (' + (result.confidence || 'Low') + ')');
@@ -649,6 +471,7 @@ function runInitialPipelineTest() {
 function runFinalScoringPipeline() {
   START_TIME     = new Date();
   CURRENT_RUN_ID = makeRunId_('SC');
+  batchFailuresInit_(CURRENT_RUN_ID);
   Logger.log(`=== runFinalScoringPipeline START ===`);
 
   try {
@@ -869,8 +692,9 @@ function updateStage1Revenue(sheet, rowNum, revenueBand, status, failReason, man
     sheet.getRange(rowNum, 6).setValue(revenueBand.band       || "Unknown");
     sheet.getRange(rowNum, 7).setValue(revenueBand.confidence || "Low");
     sheet.getRange(rowNum, 8).setValue(revenueBand.evidence   || "");
-    sheet.getRange(rowNum, 9).setValue(status                 || "FAIL");
-    sheet.getRange(rowNum, 10).setValue(failReason            || "");
+    sheet.getRange(rowNum, 9).setValue("Gemini");
+    sheet.getRange(rowNum, 10).setValue(status                || "FAIL");
+    sheet.getRange(rowNum, 11).setValue(failReason            || "");
   } catch (err) {
     Logger.log(`[updateStage1Revenue ERROR] row ${rowNum} | ${err.message}`);
   }
@@ -981,10 +805,10 @@ function getPassedCompanies() {
   const sheet = ss.getSheetByName(SHEETS.STAGE1);
   if (!sheet || sheet.getLastRow() < 2) return [];
 
-  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getValues();
 
   return data
-    .filter(row => String(row[8]).trim() === 'PASS')
+    .filter(row => String(row[9]).trim() === 'PASS')
     .map(row => ({
       company: row[0],
       website: row[1],

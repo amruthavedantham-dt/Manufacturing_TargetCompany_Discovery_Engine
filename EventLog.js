@@ -76,7 +76,7 @@ var EventLog = (function () {
   return {
     info:  function (runId, company, website, stage, outcome, message) { write_(runId, company, website, stage, 'INFO',  outcome, message); },
     warn:  function (runId, company, website, stage, outcome, message) { write_(runId, company, website, stage, 'WARN',  outcome, message); },
-    error: function (runId, company, website, stage, outcome, message) { write_(runId, company, website, stage, 'ERROR', outcome, message); },
+    error: function (runId, company, website, stage, outcome, message) { batchFailuresPush_(company, website, stage, message); write_(runId, company, website, stage, 'ERROR', outcome, message); },
   };
 
 })();

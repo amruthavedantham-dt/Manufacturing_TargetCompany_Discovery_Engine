@@ -35,6 +35,7 @@ function setupSheets() {
           "Revenue_Band",
           "Revenue_Confidence",
           "Revenue_Evidence",
+          "Revenue_Source",
 
           "Stage1_Status",
           "Fail_Reason",
@@ -540,8 +541,9 @@ function writeStage1Result(companyObj, result) {
       band,
       confidence,
       evidence,
-      result.status     || "FAIL",
-      result.failReason || "",
+      result.revenueSource || "-",
+      result.status        || "FAIL",
+      result.failReason    || "",
     ]);
 
   } catch (err) {
@@ -755,15 +757,15 @@ function buildShortlist() {
     // ── Section 2: Pull MANUAL_REVIEW companies from STAGE1
     // These never reached scoring — need human decision
     const stage1Data = stage1Sheet.getLastRow() > 1
-      ? stage1Sheet.getRange(2, 1, stage1Sheet.getLastRow() - 1, 10).getValues()
+      ? stage1Sheet.getRange(2, 1, stage1Sheet.getLastRow() - 1, 11).getValues()
       : [];
 
     stage1Data.forEach(row => {
-      const company    = String(row[0] || "").trim();
-      const website    = String(row[1] || "").trim();
-      const source     = String(row[2] || "").trim();
-      const status     = String(row[8] || "").trim();
-      const failReason = String(row[9] || "").trim();
+      const company    = String(row[0]  || "").trim();
+      const website    = String(row[1]  || "").trim();
+      const source     = String(row[2]  || "").trim();
+      const status     = String(row[9]  || "").trim();
+      const failReason = String(row[10] || "").trim();
 
       if (!company || status !== "MANUAL_REVIEW") return;
 
@@ -980,14 +982,14 @@ function getStage1Status(
       return null;
     }
 
-    // NOW 10 COLUMNS
+    // NOW 11 COLUMNS (Revenue_Source added at col 9)
     const data =
       sheet
         .getRange(
           2,
           1,
           sheet.getLastRow() - 1,
-          10
+          11
         )
         .getValues();
 
@@ -1017,8 +1019,9 @@ function getStage1Status(
             evidence: row[7],
           },
           manufacturerFlag: row[3],
-          status: row[8],
-          failReason: row[9],
+          revenueSource: row[8],
+          status: row[9],
+          failReason: row[10],
         };
       }
     }
