@@ -40,7 +40,7 @@ function runC3(companyObj) {
   // Step 3: Build prompt and call Gemini
   // --------------------------------------------------------
   const prompt = buildPrompt("C3", company, snippets);
-  const raw    = callGeminiWithRetry(prompt);
+  const raw    = callGeminiWithRetry(prompt, { company, stage: 'c3' });
 
   // --------------------------------------------------------
   // Step 4: Handle null Gemini response

@@ -118,10 +118,4 @@ function escapeHtml_(str) {
     .replace(/"/g, '&quot;');
 }
 
-// ── Creates the Pipeline custom menu on spreadsheet open ─────
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('Pipeline')
-    .addItem('Show batch failures', 'showBatchFailures')
-    .addToUi();
-}
+// onOpen() lives in Menu.js — all menu items are managed there.

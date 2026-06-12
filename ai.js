@@ -7,22 +7,74 @@
 // ============================================================
 
 // ============================================================
-// SECTION 1 — RATE LIMITER
-// Central sleep function — all modules call this, never
-// hardcode Utilities.sleep() directly.
+// SECTION 1 — ADAPTIVE RATE LIMITER
+// Starts at CONFIG defaults each run; backs off on 429/503 and
+// gradually speeds up on consecutive successes.
+// All API callers use rateLimit() — never Utilities.sleep() directly.
 // ============================================================
 
+// Per-type sleep values — initialized lazily from CONFIG on first use.
+var _adaptiveSleep = { GEMINI: null, SERPER: null };
+
 function rateLimit(type) {
-  switch (type) {
-    case "GEMINI":
-      Utilities.sleep(CONFIG.BATCH.GEMINI_SLEEP); // 4500ms → ~13 RPM
-      break;
-    case "SERPER":
-      Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP); // 1200ms → safe margin
-      break;
-    default:
-      Utilities.sleep(1000); // fallback
+  var ms;
+  if (type === 'GEMINI') {
+    if (_adaptiveSleep.GEMINI === null) _adaptiveSleep.GEMINI = CONFIG.BATCH.GEMINI_SLEEP;
+    ms = _adaptiveSleep.GEMINI;
+  } else if (type === 'SERPER') {
+    if (_adaptiveSleep.SERPER === null) _adaptiveSleep.SERPER = CONFIG.BATCH.SERPER_SLEEP;
+    ms = _adaptiveSleep.SERPER;
+  } else {
+    ms = 1000;
   }
+  Utilities.sleep(ms);
+}
+
+// Called when a 429 or 503 is received — increases sleep for future calls.
+function rateLimitBackoff(type) {
+  if (type !== 'GEMINI' && type !== 'SERPER') return;
+  if (_adaptiveSleep[type] === null) {
+    _adaptiveSleep[type] = type === 'GEMINI'
+      ? CONFIG.BATCH.GEMINI_SLEEP
+      : CONFIG.BATCH.SERPER_SLEEP;
+  }
+  var maxMs = type === 'GEMINI'
+    ? CONFIG.ADAPTIVE_RATE.GEMINI_MAX_SLEEP
+    : CONFIG.ADAPTIVE_RATE.SERPER_MAX_SLEEP;
+  var prev = _adaptiveSleep[type];
+  _adaptiveSleep[type] = Math.min(
+    Math.round(prev * CONFIG.ADAPTIVE_RATE.BACKOFF_FACTOR),
+    maxMs
+  );
+  if (_adaptiveSleep[type] !== prev) {
+    Logger.log('[RateLimit] ' + type + ' backoff: ' + prev + 'ms → ' + _adaptiveSleep[type] + 'ms');
+  }
+}
+
+// Called on a successful API response — gradually lowers sleep toward the floor.
+function rateLimitSuccess(type) {
+  if (type !== 'GEMINI' && type !== 'SERPER') return;
+  if (_adaptiveSleep[type] === null) return;
+  var minMs = type === 'GEMINI'
+    ? CONFIG.ADAPTIVE_RATE.GEMINI_MIN_SLEEP
+    : CONFIG.ADAPTIVE_RATE.SERPER_MIN_SLEEP;
+  if (_adaptiveSleep[type] <= minMs) return;
+  var prev = _adaptiveSleep[type];
+  _adaptiveSleep[type] = Math.max(
+    Math.round(prev * CONFIG.ADAPTIVE_RATE.DECAY_FACTOR),
+    minMs
+  );
+  if (_adaptiveSleep[type] !== prev) {
+    Logger.log('[RateLimit] ' + type + ' decay: ' + prev + 'ms → ' + _adaptiveSleep[type] + 'ms');
+  }
+}
+
+// Returns the current adaptive sleep for a given type (used by tests).
+function getRateLimitSleepMs(type) {
+  if (_adaptiveSleep[type] === null) {
+    return type === 'GEMINI' ? CONFIG.BATCH.GEMINI_SLEEP : CONFIG.BATCH.SERPER_SLEEP;
+  }
+  return _adaptiveSleep[type];
 }
 
 
@@ -79,6 +131,11 @@ function callSerper(companyName, queryType) {
   const cached = getCachedSearch(companyName, queryType);
   if (cached) return cached; // cache hit — no API call needed
 
+  if (CircuitBreaker.isHalted('SERPER')) {
+    Logger.log(`callSerper: SERPER circuit open — skipping "${companyName}" | ${queryType}`);
+    return "";
+  }
+
   // Step 2: Build query from template
   const queryTemplate = CONFIG.QUERIES[queryType];
   if (!queryTemplate) {
@@ -106,12 +163,18 @@ function callSerper(companyName, queryType) {
 
     if (code !== 200) {
       Logger.log(`callSerper: HTTP ${code} for "${companyName}" | ${queryType}`);
+      CircuitBreaker.recordFailure('SERPER');
+      rateLimitBackoff('SERPER');
       rateLimit("SERPER");
       return "";
     }
 
-    const data  = JSON.parse(response.getContentText());
-    snippetText = buildSnippetText(data);
+    const data       = JSON.parse(response.getContentText());
+    const numResults = (data.organic || []).length;
+    snippetText      = buildSnippetText(data);
+    TokenLog.appendSerper(CURRENT_RUN_ID, companyName, queryType, numResults);
+    CircuitBreaker.recordSuccess('SERPER');
+    rateLimitSuccess('SERPER');
 
     if (!snippetText) {
       Logger.log(`callSerper: empty results for "${companyName}" | ${queryType}`);
@@ -121,6 +184,8 @@ function callSerper(companyName, queryType) {
 
   } catch (e) {
     Logger.log(`callSerper: exception for "${companyName}" | ${queryType}: ${e.message}`);
+    CircuitBreaker.recordFailure('SERPER');
+    rateLimitBackoff('SERPER');
     rateLimit("SERPER");
     return "";
   }
@@ -166,6 +231,7 @@ function callGemini(prompt) {
   };
 
   let rawText = null;
+  let usage   = { inputTokens: 0, outputTokens: 0, thinkingTokens: 0 };
 
   try {
     Logger.log(`callGemini: sending request to Gemini`);
@@ -181,6 +247,12 @@ function callGemini(prompt) {
     }
 
     const data = JSON.parse(response.getContentText());
+    const meta = data.usageMetadata || {};
+    usage = {
+      inputTokens:    meta.promptTokenCount     || 0,
+      outputTokens:   meta.candidatesTokenCount || 0,
+      thinkingTokens: meta.thoughtsTokenCount   || 0,
+    };
 
     // Extract text from Gemini response structure
     rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
@@ -198,7 +270,7 @@ function callGemini(prompt) {
   }
 
   rateLimit("GEMINI");
-  return rawText; // string on success, null if empty response
+  return { text: rawText, usage };
 }
 
 
@@ -210,23 +282,20 @@ function callGemini(prompt) {
 // Returns response text or null.
 // ============================================================
 
-function callGeminiWithRetry(prompt) {
+function callGeminiWithRetry(prompt, ctx) {
+  const company     = (ctx && ctx.company) || '';
+  const stage       = (ctx && ctx.stage)   || 'unknown';
+
+  if (CircuitBreaker.isHalted('GEMINI')) {
+    Logger.log(`callGeminiWithRetry: GEMINI circuit open — skipping "${company}" | ${stage}`);
+    return null;
+  }
+
   const retrySleeps = CONFIG.BATCH.RETRY_SLEEPS; // [5000, 10000, 20000]
   const maxRetries  = CONFIG.BATCH.MAX_RETRIES;  // 3
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const result = callGemini(prompt);
-
-    // Clean string response — success
-    if (typeof result === "string" && result.length > 0) {
-      return result;
-    }
-
-    // Null response — empty content, don't retry
-    if (result === null) {
-      Logger.log("callGeminiWithRetry: empty response, not retrying.");
-      return null;
-    }
 
     // Error object — classify and decide
     if (result && result.error) {
@@ -237,17 +306,36 @@ function callGeminiWithRetry(prompt) {
         return null;
       }
 
-      // RATE_LIMIT or SERVER_ERROR — retry with backoff
+      // RATE_LIMIT or SERVER_ERROR — increase adaptive sleep, then retry
+      rateLimitBackoff('GEMINI');
       if (attempt < maxRetries) {
         const sleepMs = retrySleeps[attempt] || 20000;
         Logger.log(`callGeminiWithRetry: ${errorType} (${result.code}), attempt ${attempt + 1}/${maxRetries}. Waiting ${sleepMs}ms...`);
         Utilities.sleep(sleepMs);
         continue;
       }
+
+      Logger.log(`callGeminiWithRetry: exhausted ${maxRetries} retries. Returning null.`);
+      CircuitBreaker.recordFailure('GEMINI');
+      return null;
     }
 
-    // Exhausted retries
-    Logger.log(`callGeminiWithRetry: exhausted ${maxRetries} retries. Returning null.`);
+    // Success object { text, usage } from HTTP 200
+    const text  = result.text;
+    const usage = result.usage;
+
+    if (typeof text === "string" && text.length > 0) {
+      TokenLog.append(CURRENT_RUN_ID, company, stage, CONFIG.GEMINI.MODEL, usage);
+      CircuitBreaker.recordSuccess('GEMINI');
+      rateLimitSuccess('GEMINI');
+      return text;
+    }
+
+    // Empty response — log tokens (wasted call) then bail
+    TokenLog.append(CURRENT_RUN_ID, company, stage, CONFIG.GEMINI.MODEL, usage);
+    Logger.log("callGeminiWithRetry: empty response, not retrying.");
+    CircuitBreaker.recordSuccess('GEMINI'); // HTTP 200 — API is reachable
+    rateLimitSuccess('GEMINI');
     return null;
   }
 
@@ -365,7 +453,7 @@ function inferRevenueWithGeminiHelper(
       );
 
     const raw =
-      callGeminiWithRetry(prompt);
+      callGeminiWithRetry(prompt, { company: companyName, stage: 's1-revenue' });
 
     if (!raw) {
 
@@ -434,7 +522,7 @@ function testAI() {
     Logger.log("Skipping Gemini test — no Serper evidence to send.");
   } else {
     const prompt = buildPrompt("C3", "Avra Synthesis", snippets);
-    const raw    = callGeminiWithRetry(prompt);
+    const raw    = callGeminiWithRetry(prompt, { company: 'Avra Synthesis', stage: 'test-c3' });
 
     if (!raw) {
       Logger.log("Gemini: FAIL — null response. Check GEMINI API key in config.gs");
@@ -482,4 +570,97 @@ function testAI() {
   });
 
   Logger.log("\n=== testAI() complete ===");
+}
+
+
+// ============================================================
+// SECTION 9 — ADAPTIVE RATE LIMITER TEST
+// No API calls or sleeping — manipulates _adaptiveSleep directly.
+// Run from the Apps Script editor; check Execution log.
+// ============================================================
+
+function testAdaptiveRateLimiting() {
+  Logger.log('=== testAdaptiveRateLimiting START ===\n');
+  var passed = 0;
+  var failed = 0;
+
+  function assert(label, condition) {
+    if (condition) { Logger.log('PASS — ' + label); passed++; }
+    else           { Logger.log('FAIL — ' + label); failed++; }
+  }
+
+  // Save whatever was in place before the test
+  var origGemini = _adaptiveSleep.GEMINI;
+  var origSerper = _adaptiveSleep.SERPER;
+
+  // Start from known defaults
+  _adaptiveSleep.GEMINI = CONFIG.BATCH.GEMINI_SLEEP;
+  _adaptiveSleep.SERPER = CONFIG.BATCH.SERPER_SLEEP;
+  var gStart = _adaptiveSleep.GEMINI;
+  var sStart = _adaptiveSleep.SERPER;
+  Logger.log('  Starting GEMINI=' + gStart + 'ms  SERPER=' + sStart + 'ms\n');
+
+  // ── Test 1: backoff increases sleep ────────────────────────
+  rateLimitBackoff('GEMINI');
+  var gAfter = _adaptiveSleep.GEMINI;
+  assert('GEMINI sleep increases after backoff', gAfter > gStart);
+  assert('GEMINI backoff = round(start × BACKOFF_FACTOR)',
+    gAfter === Math.min(
+      Math.round(gStart * CONFIG.ADAPTIVE_RATE.BACKOFF_FACTOR),
+      CONFIG.ADAPTIVE_RATE.GEMINI_MAX_SLEEP
+    ));
+  Logger.log('  GEMINI: ' + gStart + ' → ' + gAfter + 'ms');
+
+  // ── Test 2: success reduces sleep ──────────────────────────
+  rateLimitSuccess('GEMINI');
+  var gDecayed = _adaptiveSleep.GEMINI;
+  assert('GEMINI sleep decreases after success', gDecayed < gAfter);
+  Logger.log('  GEMINI: ' + gAfter + ' → ' + gDecayed + 'ms');
+
+  // ── Test 3: many successes hit the floor ───────────────────
+  for (var i = 0; i < 200; i++) rateLimitSuccess('GEMINI');
+  assert('GEMINI hits floor after many successes',
+    _adaptiveSleep.GEMINI === CONFIG.ADAPTIVE_RATE.GEMINI_MIN_SLEEP);
+  Logger.log('  GEMINI floor = ' + _adaptiveSleep.GEMINI + 'ms');
+
+  // ── Test 4: success is a no-op at floor ────────────────────
+  var atFloor = _adaptiveSleep.GEMINI;
+  rateLimitSuccess('GEMINI');
+  assert('GEMINI unchanged at floor', _adaptiveSleep.GEMINI === atFloor);
+
+  // ── Test 5: many backoffs hit the ceiling ──────────────────
+  for (var j = 0; j < 30; j++) rateLimitBackoff('GEMINI');
+  assert('GEMINI hits ceiling after many backoffs',
+    _adaptiveSleep.GEMINI === CONFIG.ADAPTIVE_RATE.GEMINI_MAX_SLEEP);
+  Logger.log('  GEMINI ceiling = ' + _adaptiveSleep.GEMINI + 'ms');
+
+  // ── Test 6: backoff is a no-op at ceiling ──────────────────
+  var atCeil = _adaptiveSleep.GEMINI;
+  rateLimitBackoff('GEMINI');
+  assert('GEMINI unchanged at ceiling', _adaptiveSleep.GEMINI === atCeil);
+
+  // ── Test 7: SERPER adapts independently ────────────────────
+  _adaptiveSleep.SERPER = sStart;
+  rateLimitBackoff('SERPER');
+  assert('SERPER backoff is independent of GEMINI',
+    _adaptiveSleep.SERPER > sStart && _adaptiveSleep.GEMINI === atCeil);
+  Logger.log('  SERPER: ' + sStart + ' → ' + _adaptiveSleep.SERPER + 'ms');
+
+  // ── Test 8: getRateLimitSleepMs returns live values ────────
+  assert('getRateLimitSleepMs(GEMINI) matches live state',
+    getRateLimitSleepMs('GEMINI') === _adaptiveSleep.GEMINI);
+  assert('getRateLimitSleepMs(SERPER) matches live state',
+    getRateLimitSleepMs('SERPER') === _adaptiveSleep.SERPER);
+
+  // ── Test 9: uninitialised type returns config default ──────
+  _adaptiveSleep.GEMINI = null;
+  assert('getRateLimitSleepMs falls back to CONFIG when null',
+    getRateLimitSleepMs('GEMINI') === CONFIG.BATCH.GEMINI_SLEEP);
+
+  // Restore
+  _adaptiveSleep.GEMINI = origGemini;
+  _adaptiveSleep.SERPER = origSerper;
+
+  Logger.log('\n=== RESULT: ' + passed + ' passed, ' + failed + ' failed ===');
+  Logger.log('=== testAdaptiveRateLimiting COMPLETE ===');
 }

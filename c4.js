@@ -63,7 +63,7 @@ function runC4(companyObj) {
   // ── Gemini: depth classification ─────────────────────────
   const evidenceForDepth = bgSnippets.trim().length > 50 ? bgSnippets : nameResult.allSnippets;
   const depthPrompt      = buildPrompt("C4_DEPTH", company, evidenceForDepth);
-  const depthRaw         = callGeminiWithRetry(depthPrompt);
+  const depthRaw         = callGeminiWithRetry(depthPrompt, { company, stage: 'c4-depth' });
 
   if (!depthRaw) {
     Logger.log(`C4: Gemini depth null for "${company}"`);
@@ -195,7 +195,7 @@ function c4_getNameGated(company) {
 
   Logger.log(`C4 Gate3: sending ${allSnippets.length} chars to Gemini`);
   const namePrompt = buildPrompt("C4_NAME", company, allSnippets);
-  const nameRaw    = callGeminiWithRetry(namePrompt);
+  const nameRaw    = callGeminiWithRetry(namePrompt, { company, stage: 'c4-name' });
 
   if (!nameRaw) {
     return { name: "Unknown", designation: "", source: "gemini", allSnippets, failReason: "gemini_null" };
@@ -487,6 +487,11 @@ function c4_searchPersonBackground(personName, companyName) {
   const cached = getCachedSearch(companyName, "C4_BG");
   if (cached) return cached;
 
+  if (CircuitBreaker.isHalted('SERPER')) {
+    Logger.log('c4_searchPersonBackground: SERPER circuit open — skipping ' + companyName);
+    return "";
+  }
+
   const query = CONFIG.QUERIES.C4_BACKGROUND
     .replace(/\{person\}/g,  personName)
     .replace(/\{company\}/g, companyName);
@@ -499,15 +504,27 @@ function c4_searchPersonBackground(personName, companyName) {
   };
 
   try {
-    const response = UrlFetchApp.fetch("https://google.serper.dev/search", options);
-    if (response.getResponseCode() !== 200) return "";
-    const data     = JSON.parse(response.getContentText());
-    const snippets = buildSnippetText(data);
+    const response   = UrlFetchApp.fetch("https://google.serper.dev/search", options);
+    if (response.getResponseCode() !== 200) {
+      CircuitBreaker.recordFailure('SERPER');
+      rateLimitBackoff('SERPER');
+      rateLimit('SERPER');
+      return "";
+    }
+    const data       = JSON.parse(response.getContentText());
+    const numResults = (data.organic || []).length;
+    const snippets   = buildSnippetText(data);
+    TokenLog.appendSerper(CURRENT_RUN_ID, companyName, 'C4_BG', numResults);
+    CircuitBreaker.recordSuccess('SERPER');
+    rateLimitSuccess('SERPER');
     saveToCache(companyName, "C4_BG", query, snippets);
-    Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
+    rateLimit('SERPER');
     return snippets;
   } catch(e) {
     Logger.log(`c4_searchPersonBackground ERROR: ${e.message}`);
+    CircuitBreaker.recordFailure('SERPER');
+    rateLimitBackoff('SERPER');
+    rateLimit('SERPER');
     return "";
   }
 }
@@ -669,7 +686,7 @@ function testC4NameExtraction() {
         Logger.log(`Gate3: regex found nothing — calling Gemini`);
         Logger.log(`Gate3 snippet preview:\n${allSnippets.substring(0, 400)}`);
         const namePrompt = buildPrompt("C4_NAME", company, allSnippets);
-        const nameRaw    = callGeminiWithRetry(namePrompt);
+        const nameRaw    = callGeminiWithRetry(namePrompt, { company, stage: 'c4-name' });
         if (!nameRaw) {
           Logger.log(`Gate3: Gemini null`);
           summary.failed++;

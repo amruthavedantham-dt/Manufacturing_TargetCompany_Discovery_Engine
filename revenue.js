@@ -276,7 +276,7 @@ function inferRevenueBatchGemini(companyObjects) {
 
   let raw = null;
   try {
-    raw = callGeminiWithRetry(prompt);
+    raw = callGeminiWithRetry(prompt, { company: '[batch-' + companyObjects.length + ']', stage: 's1-revenue-batch' });
   } catch (err) {
     Logger.log(`[inferRevenueBatchGemini ERROR] callGeminiWithRetry threw: ${err.message}`);
   }
@@ -409,7 +409,7 @@ function inferRevenueWithGemini(companyName, evidenceText) {
     }
 
     const prompt   = buildPrompt("REVENUE_SINGLE", companyName, evidenceText);
-    const response = callGeminiWithRetry(prompt);
+    const response = callGeminiWithRetry(prompt, { company: companyName, stage: 's1-revenue' });
     Utilities.sleep(CONFIG.BATCH.GEMINI_SLEEP);
 
     if (!response) {
@@ -467,7 +467,7 @@ function inferRevenueWithGeminiHelper(companyName, evidenceText) {
     Logger.log(`[inferRevenueWithGeminiHelper START] ${companyName}`);
 
     const prompt  = buildPrompt("REVENUE_SINGLE", companyName, evidenceText);
-    const raw     = callGeminiWithRetry(prompt);
+    const raw     = callGeminiWithRetry(prompt, { company: companyName, stage: 's1-revenue' });
     if (!raw) return null;
 
     const parsed = parseGeminiJSON(raw);

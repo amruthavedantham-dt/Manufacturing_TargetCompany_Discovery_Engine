@@ -162,6 +162,11 @@ function runInitialPipeline() {
   batchFailuresInit_(CURRENT_RUN_ID);
   Logger.log(`=== runInitialPipeline START ===`);
 
+  if (CircuitBreaker.isHalted('GEMINI') || CircuitBreaker.isHalted('SERPER')) {
+    Logger.log('[runInitialPipeline] Circuit breaker still halted — aborting. Auto-resume is scheduled.');
+    return;
+  }
+
   let pending = []; // declared outside try so catch can flush it on fatal error
 
   try {
@@ -206,6 +211,18 @@ function runInitialPipeline() {
         Logger.log(`[runInitialPipeline PAUSED] Checkpoint saved at ${i} — re-run to continue`);
         EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-checkpoint', '-',
           'Time limit hit — pausing at index ' + i + ' of ' + companies.length + ', checkpoint saved');
+        buildPipelineSummary();
+        return;
+      }
+
+      // ── Circuit breaker ───────────────────────────────────
+      if (CircuitBreaker.isHalted('GEMINI') || CircuitBreaker.isHalted('SERPER')) {
+        saveCheckpoint(i);
+        Logger.log(`[runInitialPipeline HALTED] Circuit breaker tripped at index ${i}`);
+        EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-circuit-breaker', 'HALTED',
+          'Circuit breaker halted pipeline at index ' + i +
+          ' — auto-resume in ' + CONFIG.CIRCUIT_BREAKER.COOLDOWN_MINUTES + ' min');
+        buildPipelineSummary();
         return;
       }
 
@@ -269,6 +286,7 @@ function runInitialPipeline() {
       }
 
       saveCheckpoint(i + 1);
+      if ((i - checkpoint + 1) % CONFIG.PIPELINE_SUMMARY.S1_INTERVAL === 0) buildPipelineSummary();
     }
 
     // ── Flush any remaining pending (less than 10) ────────
@@ -281,6 +299,12 @@ function runInitialPipeline() {
       clearPendingQueue_();
     }
 
+    buildPipelineSummary();
+    // If auto-run is active, chain to scoring instead of stopping
+    if (PropertiesService.getScriptProperties().getProperty(AUTO_RUN_TRIGGER_KEY)) {
+      PropertiesService.getScriptProperties().setProperty(PIPELINE_MODE_KEY, 'SCORING');
+      Logger.log('[AutoRun] Stage 1 complete — switching to SCORING mode');
+    }
     saveCheckpoint(0); // reset for next full run
     Logger.log(`=== runInitialPipeline COMPLETE ===`);
     Logger.log(`[Processed] ${processed}`);
@@ -474,6 +498,11 @@ function runFinalScoringPipeline() {
   batchFailuresInit_(CURRENT_RUN_ID);
   Logger.log(`=== runFinalScoringPipeline START ===`);
 
+  if (CircuitBreaker.isHalted('GEMINI') || CircuitBreaker.isHalted('SERPER')) {
+    Logger.log('[runFinalScoringPipeline] Circuit breaker still halted — aborting. Auto-resume is scheduled.');
+    return;
+  }
+
   try {
     const companies  = getPassedCompanies();
     const checkpoint = getCheckpoint();
@@ -493,6 +522,18 @@ function runFinalScoringPipeline() {
         Logger.log(`[runFinalScoringPipeline PAUSED] Checkpoint saved at ${i}`);
         EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-checkpoint', '-',
           'Time limit hit — pausing scoring at index ' + i + ', checkpoint saved');
+        buildPipelineSummary();
+        return;
+      }
+
+      // ── Circuit breaker ───────────────────────────────────
+      if (CircuitBreaker.isHalted('GEMINI') || CircuitBreaker.isHalted('SERPER')) {
+        saveCheckpoint(i);
+        Logger.log(`[runFinalScoringPipeline HALTED] Circuit breaker tripped at index ${i}`);
+        EventLog.warn(CURRENT_RUN_ID, '', '', 'sys-circuit-breaker', 'HALTED',
+          'Circuit breaker halted scoring at index ' + i +
+          ' — auto-resume in ' + CONFIG.CIRCUIT_BREAKER.COOLDOWN_MINUTES + ' min');
+        buildPipelineSummary();
         return;
       }
 
@@ -574,11 +615,14 @@ function runFinalScoringPipeline() {
       }
 
       saveCheckpoint(i + 1);
+      if ((i - checkpoint + 1) % CONFIG.PIPELINE_SUMMARY.SCORE_INTERVAL === 0) buildPipelineSummary();
     }
 
     Logger.log(`=== runFinalScoringPipeline COMPLETE | processed: ${processed}, skipped: ${skipped} ===`);
     EventLog.info(CURRENT_RUN_ID, '', '', 'sys-run-complete', 'OK',
       'Scoring complete — processed ' + processed + ', skipped ' + skipped);
+    buildPipelineSummary();
+    deleteAutoRunTrigger_(); // no-op if auto-run was not active
     // Auto-build shortlist after scoring completes
     Logger.log(`[runFinalScoringPipeline] Building shortlist...`);
     buildShortlist();

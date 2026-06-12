@@ -755,6 +755,69 @@ const CONFIG = {
   SHORTLIST_MIN_BAND: "B",
 
   SHORTLIST_TARGET: 25,
+
+  // ----------------------------------------------------------
+  // TOKEN LOG
+  // ----------------------------------------------------------
+  TOKEN_LOG: {
+    SHEET_NAME: 'TOKEN_LOG',
+  },
+
+  // ----------------------------------------------------------
+  // GEMINI COST RATES
+  // USD per million tokens — update when Google changes pricing.
+  // INR conversion uses INR_PER_USD below.
+  // ----------------------------------------------------------
+  COST_RATES: {
+    'gemini-2.5-flash': {
+      inputPerMillion:    0.075,
+      outputPerMillion:   0.30,
+      thinkingPerMillion: 3.50,
+    },
+    'gemini-2.0-flash': {
+      inputPerMillion:    0.075,
+      outputPerMillion:   0.30,
+      thinkingPerMillion: 0.0,
+    },
+    serper: {
+      perCall: 0.001, // USD per search — update if on a different Serper plan
+    },
+  },
+
+  INR_PER_USD: 84,
+
+  // ----------------------------------------------------------
+  // CIRCUIT BREAKER
+  // ----------------------------------------------------------
+  CIRCUIT_BREAKER: {
+    GEMINI_THRESHOLD: 12,
+    SERPER_THRESHOLD: 8,
+    COOLDOWN_MINUTES: 15,
+  },
+
+  // ----------------------------------------------------------
+  // ADAPTIVE RATE LIMITING
+  // Floors/ceilings for per-run adaptive sleep values.
+  // BACKOFF_FACTOR multiplies sleep on 429/503.
+  // DECAY_FACTOR multiplies sleep on success (gradual speedup).
+  // ----------------------------------------------------------
+  ADAPTIVE_RATE: {
+    GEMINI_MIN_SLEEP:  4000,   // fastest allowed — ~15 RPM
+    GEMINI_MAX_SLEEP:  30000,  // slowest allowed — after heavy rate limiting
+    SERPER_MIN_SLEEP:  800,
+    SERPER_MAX_SLEEP:  10000,
+    BACKOFF_FACTOR:    1.5,    // 1 backoff: 8000 → 12000ms
+    DECAY_FACTOR:      0.95,   // ~14 successes to go from 8000ms → 4000ms floor
+  },
+
+  // ----------------------------------------------------------
+  // PIPELINE SUMMARY
+  // ----------------------------------------------------------
+  PIPELINE_SUMMARY: {
+    SHEET_NAME:     'PIPELINE_SUMMARY',
+    S1_INTERVAL:    25,   // rebuild after every N companies in Stage 1 loop
+    SCORE_INTERVAL: 10,   // rebuild after every N companies in scoring loop
+  },
 };
 
 

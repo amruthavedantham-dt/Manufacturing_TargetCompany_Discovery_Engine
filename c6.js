@@ -60,7 +60,7 @@ function runC6(companyObj) {
 
   const evidenceTrimmed = combinedEvidence.substring(0, 2000);
   const prompt = PROMPTS.C6.replace("{evidence}", evidenceTrimmed);
-  const raw    = callGeminiWithRetry(prompt);
+  const raw    = callGeminiWithRetry(prompt, { company, stage: 'c6' });
 
   if (!raw) {
     Logger.log(`C6: Gemini null for "${company}" — using deterministic result`);
