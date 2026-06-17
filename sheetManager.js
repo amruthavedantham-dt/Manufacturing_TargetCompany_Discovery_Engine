@@ -4,6 +4,48 @@
 // CLEANED + OPTIMIZED VERSION
 // ============================================================
 
+// ── In-memory caches (loaded once per GAS execution) ────────
+// GAS resets module-level vars at the start of each trigger
+// fire, so these are always loaded fresh each run — safe.
+var _cacheMap    = null;  // Map<"company|QUERYTYPE", snippetText>
+var _filteredSet = null;  // Set<companyName.toLowerCase()>
+
+function _loadCacheMap_() {
+  _cacheMap = new Map();
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.CACHE);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    var data  = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
+    data.forEach(function(row) {
+      var name     = String(row[0] || '').trim().toLowerCase();
+      var qtype    = String(row[1] || '').trim().toUpperCase();
+      var snippets = String(row[3] || '').trim();
+      if (name && qtype && snippets) _cacheMap.set(name + '|' + qtype, snippets);
+    });
+    Logger.log('[Cache] Loaded ' + _cacheMap.size + ' entries into memory');
+  } catch(e) {
+    Logger.log('[_loadCacheMap_ ERROR] ' + e.message);
+  }
+}
+
+function _loadFilteredSet_() {
+  _filteredSet = new Set();
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.STAGE1);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    var data  = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    data.forEach(function(row) {
+      var name = String(row[0] || '').trim().toLowerCase();
+      if (name) _filteredSet.add(name);
+    });
+    Logger.log('[FilteredSet] Loaded ' + _filteredSet.size + ' entries into memory');
+  } catch(e) {
+    Logger.log('[_loadFilteredSet_ ERROR] ' + e.message);
+  }
+}
+
 // ============================================================
 // SECTION 1 — SETUP
 // ============================================================
@@ -381,132 +423,34 @@ function resetCheckpoint() {
 // SECTION 4 — SEARCH CACHE
 // ============================================================
 
-function getCachedSearch(
-  companyName,
-  queryType
-) {
-
+function getCachedSearch(companyName, queryType) {
   try {
-
-    const ss =
-      SpreadsheetApp.getActiveSpreadsheet();
-
-    const sheet =
-      ss.getSheetByName(
-        SHEETS.CACHE
-      );
-
-    if (
-      !sheet ||
-      sheet.getLastRow() < 2
-    ) {
-
-      return null;
-    }
-
-    const data =
-      sheet
-        .getRange(
-          2,
-          1,
-          sheet.getLastRow() - 1,
-          5
-        )
-        .getValues();
-
-    for (const row of data) {
-
-      const cachedCompany =
-        String(row[0])
-          .trim()
-          .toLowerCase();
-
-      const cachedQueryType =
-        String(row[1])
-          .trim()
-          .toUpperCase();
-
-      if (
-
-        cachedCompany ===
-          companyName
-            .trim()
-            .toLowerCase()
-
-        &&
-
-        cachedQueryType ===
-          queryType
-            .trim()
-            .toUpperCase()
-      ) {
-
-        const snippets =
-          String(row[3] || "").trim();
-
-        if (snippets) {
-
-          return snippets;
-        }
-      }
-    }
-
-    return null;
-
+    if (_cacheMap === null) _loadCacheMap_();
+    var key = companyName.trim().toLowerCase() + '|' + queryType.trim().toUpperCase();
+    return _cacheMap.get(key) || null;
   } catch (err) {
-
-    Logger.log(
-      `[getCachedSearch ERROR] ${err.message}`
-    );
-
+    Logger.log('[getCachedSearch ERROR] ' + err.message);
     return null;
   }
 }
 
 
 
-function saveToCache(
-  companyName,
-  queryType,
-  queryString,
-  snippets
-) {
-
+function saveToCache(companyName, queryType, queryString, snippets) {
   try {
+    const ss    = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEETS.CACHE);
+    if (!sheet) throw new Error("SEARCH_CACHE sheet missing");
 
-    const ss =
-      SpreadsheetApp.getActiveSpreadsheet();
+    sheet.appendRow([companyName, queryType.toUpperCase(), queryString, snippets, new Date().toISOString()]);
 
-    const sheet =
-      ss.getSheetByName(
-        SHEETS.CACHE
-      );
-
-    if (!sheet) {
-
-      throw new Error(
-        "SEARCH_CACHE sheet missing"
-      );
+    // Keep in-memory map in sync so subsequent lookups this execution see the new entry
+    if (_cacheMap !== null && snippets) {
+      const key = companyName.trim().toLowerCase() + '|' + queryType.trim().toUpperCase();
+      _cacheMap.set(key, snippets);
     }
-
-    sheet.appendRow([
-
-      companyName,
-
-      queryType.toUpperCase(),
-
-      queryString,
-
-      snippets,
-
-      new Date().toISOString(),
-    ]);
-
   } catch (err) {
-
-    Logger.log(
-      `[saveToCache ERROR] ${err.message}`
-    );
+    Logger.log(`[saveToCache ERROR] ${err.message}`);
   }
 }
 
@@ -545,6 +489,11 @@ function writeStage1Result(companyObj, result) {
       result.status        || "FAIL",
       result.failReason    || "",
     ]);
+
+    // Keep in-memory set in sync so isAlreadyFiltered() sees this company immediately
+    if (_filteredSet !== null) {
+      _filteredSet.add(companyObj.company.trim().toLowerCase());
+    }
 
   } catch (err) {
     Logger.log(`[writeStage1Result ERROR] ${companyObj.company} | ${err.message}`);
@@ -898,58 +847,12 @@ function isAlreadyScored(
 
 
 
-function isAlreadyFiltered(
-  companyName
-) {
-
+function isAlreadyFiltered(companyName) {
   try {
-
-    const ss =
-      SpreadsheetApp.getActiveSpreadsheet();
-
-    const sheet =
-      ss.getSheetByName(
-        SHEETS.STAGE1
-      );
-
-    if (
-      !sheet ||
-      sheet.getLastRow() < 2
-    ) {
-
-      return false;
-    }
-
-    const data =
-      sheet
-        .getRange(
-          2,
-          1,
-          sheet.getLastRow() - 1,
-          1
-        )
-        .getValues();
-
-    return data.some(
-      row =>
-
-        String(row[0])
-          .trim()
-          .toLowerCase()
-
-        ===
-
-        companyName
-          .trim()
-          .toLowerCase()
-    );
-
+    if (_filteredSet === null) _loadFilteredSet_();
+    return _filteredSet.has(companyName.trim().toLowerCase());
   } catch (err) {
-
-    Logger.log(
-      `[isAlreadyFiltered ERROR] ${err.message}`
-    );
-
+    Logger.log(`[isAlreadyFiltered ERROR] ${err.message}`);
     return false;
   }
 }

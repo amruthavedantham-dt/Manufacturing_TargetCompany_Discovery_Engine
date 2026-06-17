@@ -14,7 +14,6 @@
 // ============================================================
 function runManufacturingGate(company) {
   const mfgSnippets = callSerper(company, "STAGE1_MFG");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
   const mfgText = String(mfgSnippets || "").toLowerCase();
 
   const manufacturerHit = CONFIG.STAGE1.MANUFACTURING.find(kw =>
@@ -41,7 +40,6 @@ function runManufacturingGate(company) {
 // ============================================================
 function runAcquiredGate(company) {
   const bizSnippets = callSerper(company, "STAGE1_BIZ");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
   const bizText = String(bizSnippets || "").toLowerCase();
 
   const peHit = CONFIG.STAGE1.PE_ACQUIRED.find(kw =>
@@ -114,7 +112,6 @@ function runCompany(companyObj) {
   // ── Gate 1: Revenue ───────────────────────────────────────
   // Step 1a — dedicated Tofler/Zauba/Screener search
   const directSnippets = callSerper(company, "REVENUE_DIRECT");
-  Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
   const directText = String(directSnippets || "");
 
   let revenueBand   = extractDirectRevenue(directText);
@@ -123,7 +120,6 @@ function runCompany(companyObj) {
   if (!revenueBand) {
     // Step 1b — signals search
     const signalSnippets   = callSerper(company, "REVENUE_SIGNALS");
-    Utilities.sleep(CONFIG.BATCH.SERPER_SLEEP);
     const signalText       = String(signalSnippets || "").trim();
     const combinedEvidence = (directText + " " + signalText).trim();
 

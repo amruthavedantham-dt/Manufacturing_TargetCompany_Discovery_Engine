@@ -494,6 +494,62 @@ function inferRevenueWithGeminiHelper(
 // ===========================================================
 
 // ============================================================
+// SECTION 7.6 — SERPER CONNECTION TEST
+// Standalone — bypasses cache, circuit breaker, and rate limiter.
+// Makes exactly ONE Serper call and logs the full response body
+// so the real error (quota/credits/key issue) is visible, not
+// just the HTTP status code.
+// Select "testSerperConnection" from dropdown and hit Run.
+// ============================================================
+
+function testSerperConnection() {
+  Logger.log("=== testSerperConnection START ===");
+
+  const key = CONFIG.KEYS.SERPER;
+  if (!key) {
+    Logger.log("FAIL — SERPER_API_KEY is missing from Script Properties.");
+    return;
+  }
+  Logger.log("Key present — length " + key.length + ", starts with: " + key.substring(0, 4) + "...");
+
+  const options = {
+    method:             "post",
+    headers: {
+      "X-API-KEY":    key,
+      "Content-Type": "application/json",
+    },
+    payload:            JSON.stringify({ q: "Tata Motors", num: 3 }),
+    muteHttpExceptions: true,
+  };
+
+  try {
+    const response = UrlFetchApp.fetch("https://google.serper.dev/search", options);
+    const code = response.getResponseCode();
+    const body = response.getContentText();
+
+    Logger.log("HTTP status: " + code);
+    Logger.log("Response body: " + body);
+
+    if (code === 200) {
+      Logger.log("RESULT: PASS — Serper is working normally.");
+    } else if (code === 400) {
+      Logger.log("RESULT: FAIL — HTTP 400. Check response body above — usually means out of credits/quota, or a malformed key.");
+    } else if (code === 401 || code === 403) {
+      Logger.log("RESULT: FAIL — HTTP " + code + ". API key is invalid, revoked, or unauthorized.");
+    } else if (code === 429) {
+      Logger.log("RESULT: FAIL — HTTP 429. Rate limited (this is different from quota exhaustion).");
+    } else {
+      Logger.log("RESULT: FAIL — unexpected HTTP " + code + ". See response body above.");
+    }
+  } catch (e) {
+    Logger.log("RESULT: FAIL — exception: " + e.message);
+  }
+
+  Logger.log("=== testSerperConnection COMPLETE ===");
+}
+
+
+// ============================================================
 // SECTION 8 — TEST FUNCTION
 // Run this to verify both APIs work before running pipeline.
 // Select "testAI" from dropdown and hit Run.

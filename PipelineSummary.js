@@ -158,7 +158,7 @@ function psFunnelHdr_(sheet, row, label) {
 
 function psDataRow_(sheet, row, label, count, pctStr) {
   sheet.getRange(row, 1).setValue(label);
-  sheet.getRange(row, 2).setValue(count).setHorizontalAlignment('right');
+  sheet.getRange(row, 2).setValue(count).setHorizontalAlignment('right').setNumberFormat('0');
   if (pctStr) sheet.getRange(row, 3).setValue(pctStr).setFontColor('#888888');
   return row + 1;
 }

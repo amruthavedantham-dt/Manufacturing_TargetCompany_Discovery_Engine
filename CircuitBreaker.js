@@ -271,16 +271,11 @@ function resumeAfterCircuitBreaker() {
   // Reset both breakers (clears halted flag + consecutive counter)
   CircuitBreaker.reset('GEMINI');
   CircuitBreaker.reset('SERPER');
-
-  // Restart whichever pipeline was interrupted
-  var resumeFn = props.getProperty('CB_RESUME_FN') || 'runInitialPipeline';
   props.deleteProperty('CB_RESUME_FN');
 
-  Logger.log('[CircuitBreaker] Resuming: ' + resumeFn);
-
-  if (resumeFn === 'runFinalScoringPipeline') {
-    runFinalScoringPipeline();
-  } else {
-    runInitialPipeline();
-  }
+  // Do NOT call the pipeline here — autoRunHandler fires every 10 minutes and will
+  // pick up automatically now that the breakers are clear. Calling the pipeline
+  // directly here causes autoRunHandler to also fire (within 10 min) and both
+  // scripts hit the same rate-limited APIs simultaneously, re-tripping the breaker.
+  Logger.log('[CircuitBreaker] Both breakers reset. autoRunHandler will resume on its next fire (within 10 min).');
 }
