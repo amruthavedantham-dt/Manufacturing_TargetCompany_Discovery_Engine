@@ -561,10 +561,16 @@ function runFinalScoringPipeline() {
         const c3 = runC3(companyObj);
         const c4 = runC4(companyObj);
 
+        // STAGE1_MFG/STAGE1_BIZ were cached in pipeline.js under the
+        // CLEANED name (cleanCompanyName runs before those Serper calls),
+        // while companyObj.company here is the raw MASTER-sheet name —
+        // must clean it too or these two lookups always miss.
+        const cleanedForCache = cleanCompanyName(companyObj.company);
         const c5QueryPriority = ["STAGE1_MFG", "C3", "STAGE1_BIZ"];
         let c5Snippets = null;
         for (const qt of c5QueryPriority) {
-          c5Snippets = getCachedSearch(companyObj.company, qt);
+          const lookupName = (qt === "C3") ? companyObj.company : cleanedForCache;
+          c5Snippets = getCachedSearch(lookupName, qt);
           if (c5Snippets && c5Snippets.trim().length >= 50) break;
         }
         const c5 = runC5(companyObj, c5Snippets);
@@ -658,10 +664,14 @@ function runFinalScoringPipelineTest() {
         const c3 = runC3(companyObj);
         const c4 = runC4(companyObj);
 
+        // See note in runFinalScoringPipeline — STAGE1_MFG/STAGE1_BIZ
+        // were cached under the cleaned name, not the raw sheet name.
+        const cleanedForCache = cleanCompanyName(companyObj.company);
         const c5QueryPriority = ["STAGE1_MFG", "C3", "STAGE1_BIZ"];
         let c5Snippets = null;
         for (const qt of c5QueryPriority) {
-          c5Snippets = getCachedSearch(companyObj.company, qt);
+          const lookupName = (qt === "C3") ? companyObj.company : cleanedForCache;
+          c5Snippets = getCachedSearch(lookupName, qt);
           if (c5Snippets && c5Snippets.trim().length >= 50) break;
         }
         const c5 = runC5(companyObj, c5Snippets);

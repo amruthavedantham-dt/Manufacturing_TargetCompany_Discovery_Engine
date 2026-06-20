@@ -298,7 +298,7 @@ const CONFIG = {
       '"{company}" ("annual revenue" OR "turnover" OR "crore" OR "employees" OR "workforce" OR "manufacturing plant" OR "production capacity" OR "export" OR "founded") -site:justdial.com -site:indiamart.com -site:tradeindia.com -site:facebook.com -site:instagram.com -site:sulekha.com -site:exportersindia.com',
 
     // CHANGED: was too narrow — demanded patents+DSIR+USFDA+WHO-GMP+EU-GMP all at once
-    C3: '"{company}" chemical manufacturer India R&D innovation technical product',
+    C3: '"{company}" manufacturer India R&D innovation product proprietary',
 
     // C4 name resolution — three targeted gates, tried in order
     C4_TOFLER:  '"{company}" (director OR "managing director" OR founder OR promoter) site:tofler.in',
@@ -482,7 +482,7 @@ const CONFIG = {
       score: 18,
       keywords: ["precision machined", "precision engineering", "cnc machining",
         "forging", "casting", "stamping", "sheet metal", "machined components",
-        "turned parts", "tooling"],
+        "turned parts", "tooling", "ball bearing", "roller bearing"],
       reason: "Export demand + import substitution.",
     },
     {
@@ -495,10 +495,25 @@ const CONFIG = {
 
     // ---- MODERATE TAILWIND (score 16) ----
     {
+      sector: "Dyes & colorants",
+      score: 16,
+      keywords: ["dyestuff", "dye manufacturer", "colorant", "reactive dye",
+        "disperse dye", "acid dye", "pigment manufacturer", "colour intermediate"],
+      reason: "China+1 tailwind in dyes/colorants; India gaining export share.",
+    },
+    {
+      sector: "Electrical equipment & cables",
+      score: 16,
+      keywords: ["electric motor", "transformer", "switchgear", "cable manufacturer",
+        "wire manufacturer", "electrical equipment", "winding wire", "conductor manufacturer"],
+      reason: "Capex cycle + power infra + EV charging buildout.",
+    },
+    {
       sector: "Polymer & rubber products",
       score: 16,
       keywords: ["resin", "polymer", "rubber", "gasket", "polymer additives",
-        "performance chemicals", "compounding", "masterbatch"],
+        "performance chemicals", "compounding", "masterbatch", "pvc pipes",
+        "pipe fittings", "plastic extrusion", "blow moulding", "rotomoulding"],
       reason: "Industrial materials demand.",
     },
     {
@@ -512,7 +527,8 @@ const CONFIG = {
       sector: "Packaging — specialty & flexible",
       score: 16,
       keywords: ["flexible packaging", "specialty packaging", "multilayer",
-        "barrier film", "laminates", "aseptic packaging", "blister packaging"],
+        "barrier film", "laminates", "aseptic packaging", "blister packaging",
+        "woven sacks", "fibc", "bulk bags", "raffia"],
       reason: "FMCG and pharma packaging growth.",
     },
     {
@@ -538,7 +554,28 @@ const CONFIG = {
       reason: "Sustainability and industrial water demand.",
     },
 
+    // ---- LOWER-MODERATE TAILWIND (score 14) ----
+    {
+      sector: "Paint & coatings",
+      score: 14,
+      keywords: ["paint", "coating", "coatings", "varnish", "lacquer",
+        "primer", "alkyd", "epoxy coating", "decorative paint",
+        "industrial coating", "protective coating", "paint manufacturer"],
+      reason: "Growing domestic construction + infrastructure market.",
+    },
+
     // ---- STANDARD (score 12) ----
+    // NOTE: "Steel & metal fabrication" is checked before "Textile — commodity"
+    // because the textile sector's "fabric" keyword is a substring of
+    // "fabrication" — without this order, "steel fabrication" would
+    // wrongly match Textile via "fabric" before reaching Steel.
+    {
+      sector: "Steel & metal fabrication",
+      score: 12,
+      keywords: ["steel fabrication", "metal fabrication", "structural steel",
+        "stainless steel", "aluminium extrusion", "copper product", "brass"],
+      reason: "Steady demand but low differentiation.",
+    },
     {
       sector: "Textile — commodity",
       score: 12,
@@ -554,11 +591,12 @@ const CONFIG = {
       reason: "Infrastructure boom but commoditised.",
     },
     {
-      sector: "Steel & metal fabrication",
+      sector: "Tools, hardware & misc engineering goods",
       score: 12,
-      keywords: ["steel fabrication", "metal fabrication", "structural steel",
-        "stainless steel", "aluminium extrusion", "copper product", "brass"],
-      reason: "Steady demand but low differentiation.",
+      keywords: ["hand tools", "cutting tools", "tools manufacturer", "bicycle",
+        "bicycle parts", "cycle components", "hardware manufacturer",
+        "marine equipment", "shipbuilding", "marine components"],
+      reason: "Stable export demand, lower differentiation.",
     },
     {
       sector: "Paper & packaging — commodity",

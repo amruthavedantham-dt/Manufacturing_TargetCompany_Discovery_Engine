@@ -429,68 +429,8 @@ function parseGeminiJSON(text) {
 
 
 // ===========================================================
-// ============================================================
-// SECTION 7.5 — GEMINI REVENUE HELPER
-// Standardized revenue inference helper
-// ============================================================
-
-function inferRevenueWithGeminiHelper(
-  companyName,
-  evidenceText
-) {
-
-  try {
-
-    Logger.log(
-      `[inferRevenueWithGeminiHelper START] ${companyName}`
-    );
-
-    const prompt =
-      buildPrompt(
-        "REVENUE_SINGLE",
-        companyName,
-        evidenceText
-      );
-
-    const raw =
-      callGeminiWithRetry(prompt, { company: companyName, stage: 's1-revenue' });
-
-    if (!raw) {
-
-      Logger.log(
-        `[inferRevenueWithGeminiHelper EMPTY] ${companyName}`
-      );
-
-      return null;
-    }
-
-    const parsed =
-      parseGeminiJSON(raw);
-
-    if (!parsed) {
-
-      Logger.log(
-        `[inferRevenueWithGeminiHelper PARSE FAIL] ${companyName}`
-      );
-
-      return null;
-    }
-
-    Logger.log(
-      `[inferRevenueWithGeminiHelper SUCCESS] ${companyName}`
-    );
-
-    return parsed;
-
-  } catch (err) {
-
-    Logger.log(
-      `[inferRevenueWithGeminiHelper ERROR] ${companyName} | ${err.message}`
-    );
-
-    return null;
-  }
-}
+// SECTION 7.5 — inferRevenueWithGeminiHelper() lives in revenue.gs
+// (kept alongside inferRevenueWithGemini() — same domain, same file)
 // ===========================================================
 
 // ============================================================

@@ -641,7 +641,13 @@ function buildShortlist() {
       ).clearContent();
     }
 
-    // ── Section 1: Pull all scored companies from SCORES ───
+    // ── Section 1: Pull scored companies from SCORES ───────
+    // Only bands at or above CONFIG.SHORTLIST_MIN_BAND make the
+    // shortlist (CONFIG.BANDS is ordered best-to-worst: A,B,C,D).
+    const bandOrder    = CONFIG.BANDS.map(b => b.band);
+    const minBandIdx   = bandOrder.indexOf(CONFIG.SHORTLIST_MIN_BAND);
+    const allowedBands = minBandIdx === -1 ? bandOrder : bandOrder.slice(0, minBandIdx + 1);
+
     const scoresData = scoresSheet.getLastRow() > 1
       ? scoresSheet.getRange(2, 1, scoresSheet.getLastRow() - 1, 21).getValues()
       : [];
@@ -672,12 +678,12 @@ function buildShortlist() {
       const bandLabel  = row[20] || "";
 
       if (!company) return;
+      if (!allowedBands.includes(band)) return;
 
       // Verdict based on band
       let verdict = "Not ICP";
       if (band === "A")      verdict = "Strong ICP — prioritise outreach";
       else if (band === "B") verdict = "Probable ICP — include in outreach";
-      else if (band === "C") verdict = "Borderline — low priority";
 
       rows.push([
         rank++,
@@ -773,11 +779,9 @@ function buildShortlist() {
     const scored       = rows.filter(r => r[16] !== "MANUAL_REVIEW").length;
     const manualReview = rows.filter(r => r[16] === "MANUAL_REVIEW").length;
 
-    Logger.log(`[buildShortlist SUCCESS] ${scored} scored companies + ${manualReview} manual review`);
+    Logger.log(`[buildShortlist SUCCESS] ${scored} scored companies (Band ${allowedBands.join('/')} only) + ${manualReview} manual review`);
     Logger.log(`[buildShortlist] Band A: ${rows.filter(r => r[16] === "A").length}`);
     Logger.log(`[buildShortlist] Band B: ${rows.filter(r => r[16] === "B").length}`);
-    Logger.log(`[buildShortlist] Band C: ${rows.filter(r => r[16] === "C").length}`);
-    Logger.log(`[buildShortlist] Band D: ${rows.filter(r => r[16] === "D").length}`);
     Logger.log(`[buildShortlist] Manual Review: ${manualReview}`);
 
   } catch (err) {

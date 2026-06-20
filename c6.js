@@ -24,7 +24,9 @@ function runC6(companyObj) {
   const snippets = callSerper(company, "C6");
 
   // ── Step 2: Also pull from Stage 1 cache as fallback ─────
-  const cachedMfg = getCachedSearch(company, "STAGE1_MFG") || "";
+  // STAGE1_MFG was cached in pipeline.js under the CLEANED name —
+  // must clean it here too or this lookup always misses.
+  const cachedMfg = getCachedSearch(cleanCompanyName(company), "STAGE1_MFG") || "";
   const cachedC3  = getCachedSearch(company, "C3")         || "";
 
   const combinedEvidence = [
@@ -167,15 +169,8 @@ function buildC6SignalString(firedSignals) {
 
 // ============================================================
 // SECTION 4 — CONFIDENCE LEVEL
-// Reads from CONFIG.C6.CONFIDENCE_MAP.
+// getC6Confidence() lives in config.gs alongside getC6Score().
 // ============================================================
-
-function getC6Confidence(totalStrength) {
-  for (const entry of CONFIG.C6.CONFIDENCE_MAP) {
-    if (totalStrength >= entry.minStrength) return entry.level;
-  }
-  return "Low";
-}
 
 // ============================================================
 // SECTION 5 — TEST FUNCTION

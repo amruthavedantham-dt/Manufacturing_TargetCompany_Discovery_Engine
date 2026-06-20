@@ -28,13 +28,15 @@ function buildPipelineSummary() {
       : [];
 
     var processed = s1Rows.length;
-    var g1Pass = 0, g2Pass = 0, g3Pass = 0;
+    var revPass = 0, g1Pass = 0, g2Pass = 0, g3Pass = 0;
     var manualReview = 0, failed = 0, errors = 0, pendingRev = 0;
 
     s1Rows.forEach(function(row) {
+      var band   = String(row[5] || '').trim();
       var mfr    = String(row[3] || '').trim();
       var acq    = String(row[4] || '').trim();
       var status = String(row[9] || '').trim();
+      if (CONFIG.PIPELINE.STAGE1_PASS_BANDS.indexOf(band) !== -1) revPass++;
       if (mfr === 'YES')                    g1Pass++;
       if (mfr === 'YES' && acq === 'NO')    g2Pass++;
       if      (status === 'PASS')           g3Pass++;
@@ -92,9 +94,9 @@ function buildPipelineSummary() {
     r = psDataRow_(sheet, r, 'Not yet processed',        initialDataset - processed,
                                                          psFmt_(initialDataset - processed, initialDataset));
     r++; // blank
-    r = psDataRow_(sheet, r, '  Gate 1 — Manufacturer Pass', g1Pass,  psFmt_(g1Pass, processed));
-    r = psDataRow_(sheet, r, '  Gate 2 — Not Acquired',      g2Pass,  psFmt_(g2Pass, g1Pass));
-    r = psDataRow_(sheet, r, '  Gate 3 — Revenue PASS',      g3Pass,  psFmt_(g3Pass, g2Pass));
+    r = psDataRow_(sheet, r, '  Gate 1 — Revenue PASS',      revPass, psFmt_(revPass, processed));
+    r = psDataRow_(sheet, r, '  Gate 2 — Manufacturer Pass', g1Pass,  psFmt_(g1Pass, revPass));
+    r = psDataRow_(sheet, r, '  Gate 3 — Not Acquired',      g2Pass,  psFmt_(g2Pass, g1Pass));
     r++;
     r = psDataRow_(sheet, r, '  Manual Review',              manualReview, psFmt_(manualReview, processed));
     r = psDataRow_(sheet, r, '  Failed',                     failed,       psFmt_(failed,       processed));
@@ -141,6 +143,54 @@ function buildPipelineSummary() {
   } catch(e) {
     Logger.log('[buildPipelineSummary ERROR] ' + e.message);
   }
+}
+
+// ============================================================
+// testStage1Counts
+// Independent sanity check — recomputes the funnel counts with
+// explicit AND-conditions on every row (does NOT trust gate
+// sequencing the way buildPipelineSummary's g1Pass/g2Pass do).
+// Run this whenever the dashboard numbers look off.
+// ============================================================
+function testStage1Counts() {
+  Logger.log('=== testStage1Counts START ===');
+
+  var ss          = SpreadsheetApp.getActiveSpreadsheet();
+  var masterSheet = ss.getSheetByName(SHEETS.MASTER);
+  var initial     = (masterSheet && masterSheet.getLastRow() > 1)
+    ? masterSheet.getLastRow() - 1
+    : 0;
+
+  var s1Sheet = ss.getSheetByName(SHEETS.STAGE1);
+  var s1Rows  = (s1Sheet && s1Sheet.getLastRow() > 1)
+    ? s1Sheet.getRange(2, 1, s1Sheet.getLastRow() - 1, 11).getValues()
+    : [];
+
+  var revenuePassed     = 0;
+  var manufacturerPassed = 0;
+  var notAcquiredPassed  = 0;
+
+  s1Rows.forEach(function(row) {
+    var band = String(row[5] || '').trim();
+    var mfr  = String(row[3] || '').trim();
+    var acq  = String(row[4] || '').trim();
+
+    var revOk = CONFIG.PIPELINE.STAGE1_PASS_BANDS.indexOf(band) !== -1;
+    var mfrOk = revOk && mfr === 'YES';
+    var acqOk = mfrOk && acq === 'NO';
+
+    if (revOk) revenuePassed++;
+    if (mfrOk) manufacturerPassed++;
+    if (acqOk) notAcquiredPassed++;
+  });
+
+  Logger.log('1. Initial dataset:           ' + initial);
+  Logger.log('2. Revenue passed:            ' + revenuePassed + ' (band in ' + CONFIG.PIPELINE.STAGE1_PASS_BANDS.join(',') + ')');
+  Logger.log('3. + Manufacturer passed:     ' + manufacturerPassed + ' (revenue PASS AND mfr=YES)');
+  Logger.log('4. + Not acquired:            ' + notAcquiredPassed + ' (revenue PASS AND mfr=YES AND acq=NO)');
+  Logger.log('=== testStage1Counts COMPLETE ===');
+
+  return { initial: initial, revenuePassed: revenuePassed, manufacturerPassed: manufacturerPassed, notAcquiredPassed: notAcquiredPassed };
 }
 
 
