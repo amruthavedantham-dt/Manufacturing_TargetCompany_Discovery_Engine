@@ -806,7 +806,7 @@ function testCheckpointing() {
   if (stage1) {
     stage1.appendRow([
       'TEST_DRAIN_COMPANY', 'testdrain.com', 'Test',
-      'NO', 'NO', 'PENDING_REVENUE', 'Low', 'Awaiting Gemini batch',
+      'NO', 'NO', 'PENDING_REVENUE', 'Low', 'Awaiting Gemini batch', 'Gemini',
       'PENDING_REVENUE', '',
     ]);
     const leftover = drainPendingRevenue();
@@ -824,7 +824,7 @@ function testCheckpointing() {
   if (stage1) {
     stage1.appendRow([
       'TEST_PASS_COMPANY', 'testpass.com', 'Test',
-      'YES', 'NO', '50-500Cr', 'High', 'Revenue found',
+      'YES', 'NO', '50-500Cr', 'High', 'Revenue found', 'Direct',
       'PASS', '',
     ]);
     const leftover2 = drainPendingRevenue();

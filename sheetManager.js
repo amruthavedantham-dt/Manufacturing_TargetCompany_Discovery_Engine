@@ -926,6 +926,7 @@ function getStage1Status(
             evidence: row[7],
           },
           manufacturerFlag: row[3],
+          acquiredFlag: row[4],
           revenueSource: row[8],
           status: row[9],
           failReason: row[10],
