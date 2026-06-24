@@ -15,6 +15,7 @@ function onOpen() {
     .addItem('Run Stage 1 Pipeline',     'runInitialPipeline')
     .addItem('Run Scoring Pipeline',     'runFinalScoringPipeline')
     .addItem('Build Shortlist',          'buildShortlist')
+    .addItem('Mark EST_MISTAKE in Shortlist', 'markEstMistakeInShortlist')
     .addSeparator()
     .addItem('Refresh Pipeline Summary', 'buildPipelineSummary')
     .addItem('Show Cost Summary',        'buildCostSummary')

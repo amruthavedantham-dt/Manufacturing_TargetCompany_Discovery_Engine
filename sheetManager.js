@@ -784,8 +784,108 @@ function buildShortlist() {
     Logger.log(`[buildShortlist] Band B: ${rows.filter(r => r[16] === "B").length}`);
     Logger.log(`[buildShortlist] Manual Review: ${manualReview}`);
 
+    // Re-apply EST_MISTAKE marks if that sheet exists
+    if (ss.getSheetByName("EST_MISTAKE")) {
+      markEstMistakeInShortlist();
+    }
+
   } catch (err) {
     Logger.log(`[buildShortlist ERROR] ${err.message}`);
+  }
+}
+
+// ============================================================
+// SECTION 8B — MARK EST_MISTAKE COMPANIES IN SHORTLIST
+// Reads company names from the EST_MISTAKE sheet (column
+// "Company Name"), finds matching rows in SHORTLIST (col 2),
+// and highlights them in orange + tags Manual_Notes.
+// Safe to re-run: clears previous marks before re-marking.
+// ============================================================
+function markEstMistakeInShortlist() {
+  try {
+    const ss             = SpreadsheetApp.getActiveSpreadsheet();
+    const estSheet       = ss.getSheetByName("EST_MISTAKE");
+    const shortlistSheet = ss.getSheetByName(SHEETS.SHORTLIST);
+
+    if (!estSheet)       throw new Error("EST_MISTAKE sheet not found");
+    if (!shortlistSheet || shortlistSheet.getLastRow() < 2) {
+      Logger.log("[markEstMistakeInShortlist] SHORTLIST is empty or missing");
+      return;
+    }
+
+    // ── Locate "Company Name" column in EST_MISTAKE ───────
+    const estHeaders = estSheet
+      .getRange(1, 1, 1, estSheet.getLastColumn())
+      .getValues()[0];
+    const companyColIdx = estHeaders.findIndex(
+      h => String(h).trim().toLowerCase() === "company name"
+    );
+    if (companyColIdx === -1)
+      throw new Error('"Company Name" column not found in EST_MISTAKE');
+
+    // ── Collect EST_MISTAKE names into a Set (lowercase) ─
+    const estData  = estSheet
+      .getRange(2, companyColIdx + 1, Math.max(estSheet.getLastRow() - 1, 1), 1)
+      .getValues();
+    const estNames = new Set(
+      estData
+        .map(r => String(r[0] || "").trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    Logger.log(`[markEstMistakeInShortlist] ${estNames.size} companies loaded from EST_MISTAKE`);
+
+    // ── Scan SHORTLIST and (re)apply marks ────────────────
+    const numRows  = shortlistSheet.getLastRow() - 1;
+    const numCols  = shortlistSheet.getLastColumn();
+    const slData   = shortlistSheet
+      .getRange(2, 1, numRows, numCols)
+      .getValues();
+
+    const MARK_COLOR  = "#ffe0b2"; // orange — distinct from band A/B/C colours
+    const MARK_TAG    = "EST_MISTAKE match";
+
+    // Band colours used by buildShortlist (needed for clearing marks back)
+    const BAND_COLORS = { A: "#d4edda", B: "#cce5ff", C: "#fff3cd" };
+
+    let matched = 0;
+
+    slData.forEach((row, idx) => {
+      const company = String(row[1] || "").trim().toLowerCase(); // col 2 = index 1
+      const band    = String(row[16] || "").trim();
+      const rowNum  = idx + 2;
+      const range   = shortlistSheet.getRange(rowNum, 1, 1, numCols);
+
+      if (estNames.has(company)) {
+        range.setBackground(MARK_COLOR);
+        const notesCell = shortlistSheet.getRange(rowNum, 20);
+        const existing  = String(notesCell.getValue() || "").trim();
+        if (!existing.includes(MARK_TAG)) {
+          notesCell.setValue(existing ? existing + "; " + MARK_TAG : MARK_TAG);
+        }
+        matched++;
+      } else {
+        // Restore the original band colour (clear any stale orange from a previous run)
+        const noteVal = String(shortlistSheet.getRange(rowNum, 20).getValue() || "");
+        if (noteVal.includes(MARK_TAG)) {
+          // Remove the tag from Manual_Notes
+          shortlistSheet.getRange(rowNum, 20)
+            .setValue(noteVal.replace(/;?\s*EST_MISTAKE match/g, "").trim());
+          // Restore band colour
+          range.setBackground(BAND_COLORS[band] || null);
+        }
+      }
+    });
+
+    SpreadsheetApp.flush();
+
+    const msg = `${matched} of ${estNames.size} EST_MISTAKE companies found and highlighted in SHORTLIST`;
+    Logger.log(`[markEstMistakeInShortlist] ${msg}`);
+    SpreadsheetApp.getActive().toast(msg, "Done", 6);
+
+  } catch (err) {
+    Logger.log(`[markEstMistakeInShortlist ERROR] ${err.message}`);
+    SpreadsheetApp.getActive().toast("Error: " + err.message, "markEstMistakeInShortlist", 8);
   }
 }
 
