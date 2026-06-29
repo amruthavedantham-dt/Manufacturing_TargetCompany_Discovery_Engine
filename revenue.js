@@ -183,16 +183,8 @@ function employeeHeuristic(evidenceText) {
     };
   }
 
-  if (count >= 200) {
-    return {
-      band:       CONFIG.REVENUE.BANDS.MID,
-      confidence: CONFIG.REVENUE.CONFIDENCE.MEDIUM,
-      evidence:   `Employee count ${Math.round(count)} — consistent with 50-500Cr`,
-    };
-  }
-
-  // 50-199: genuinely ambiguous — send to Gemini batch
-  Logger.log(`[employeeHeuristic] count ${count} in ambiguous range 50-199 — queuing for Gemini`);
+  // count >= 50: send to Gemini — employee count alone is not reliable enough to auto-pass
+  Logger.log(`[employeeHeuristic] count ${count} >= 50 — queuing for Gemini`);
   return null;
 }
 

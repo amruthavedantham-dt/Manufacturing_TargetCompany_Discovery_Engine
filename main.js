@@ -128,7 +128,7 @@ function drainPendingRevenue() {
     const data     = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getValues();
     const leftover = [];
 
-    data.forEach(row => {
+    data.forEach((row, idx) => {
       const company = String(row[0] || '').trim();
       const status  = String(row[9] || '').trim();
       if (!company || status !== 'PENDING_REVENUE') return;
@@ -139,7 +139,7 @@ function drainPendingRevenue() {
         company:        cleanName,
         directSnippet:  getCachedSearch(cleanName, 'REVENUE_DIRECT')  || '',
         signalsSnippet: getCachedSearch(cleanName, 'REVENUE_SIGNALS') || '',
-        rowNum:         null,
+        rowNum:         idx + 2, // direct index avoids cleaned-name lookup mismatch
       });
     });
 
@@ -359,9 +359,11 @@ function resolveGeminiBatch(pendingQueue) {
     if (name) nameToRow[name] = idx + 2;
   });
 
-  // Attach row numbers
+  // Attach row numbers — skip if already set (e.g. drain path sets rowNum directly)
   pendingQueue.forEach(item => {
-    item.rowNum = nameToRow[item.company.trim().toLowerCase()] || null;
+    if (!item.rowNum) {
+      item.rowNum = nameToRow[item.company.trim().toLowerCase()] || null;
+    }
   });
 
   // Call Gemini batch

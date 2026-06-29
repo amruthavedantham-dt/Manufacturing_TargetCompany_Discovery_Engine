@@ -796,9 +796,11 @@ function buildShortlist() {
 
 // ============================================================
 // SECTION 8B — MARK EST_MISTAKE COMPANIES IN SHORTLIST
-// Reads company names from the EST_MISTAKE sheet (column
-// "Company Name"), finds matching rows in SHORTLIST (col 2),
-// and highlights them in orange + tags Manual_Notes.
+// Reads "Company Name" + "Revenue_Source" from EST_MISTAKE,
+// finds matching rows in SHORTLIST (col 2), highlights in
+// orange, and writes a source-specific tag to Manual_Notes:
+//   Revenue_Source = Signals   → "Signals Est Mistake"
+//   Revenue_Source = Heuristic → "Estimation Mistake"
 // Safe to re-run: clears previous marks before re-marking.
 // ============================================================
 function markEstMistakeInShortlist() {
@@ -813,7 +815,7 @@ function markEstMistakeInShortlist() {
       return;
     }
 
-    // ── Locate "Company Name" column in EST_MISTAKE ───────
+    // ── Locate columns in EST_MISTAKE ─────────────────────
     const estHeaders = estSheet
       .getRange(1, 1, 1, estSheet.getLastColumn())
       .getValues()[0];
@@ -823,17 +825,37 @@ function markEstMistakeInShortlist() {
     if (companyColIdx === -1)
       throw new Error('"Company Name" column not found in EST_MISTAKE');
 
-    // ── Collect EST_MISTAKE names into a Set (lowercase) ─
-    const estData  = estSheet
-      .getRange(2, companyColIdx + 1, Math.max(estSheet.getLastRow() - 1, 1), 1)
-      .getValues();
-    const estNames = new Set(
-      estData
-        .map(r => String(r[0] || "").trim().toLowerCase())
-        .filter(Boolean)
+    const sourceColIdx = estHeaders.findIndex(
+      h => String(h).trim().toLowerCase() === "revenue_source"
     );
 
-    Logger.log(`[markEstMistakeInShortlist] ${estNames.size} companies loaded from EST_MISTAKE`);
+    // ── Build Map: company (lowercase) → tag ─────────────
+    const TAG_SIGNALS   = "Signals Est Mistake";
+    const TAG_HEURISTIC = "Estimation Mistake";
+    // All tags ever written by this function — used for clean stale-mark removal
+    const ALL_TAGS = [TAG_SIGNALS, TAG_HEURISTIC,
+                      "EST_MISTAKE match",
+                      "Revenue Estimation Mistake, Revenue out of Range"];
+
+    const numEstRows = Math.max(estSheet.getLastRow() - 1, 1);
+    const colsToRead = sourceColIdx === -1
+      ? companyColIdx + 1
+      : Math.max(companyColIdx, sourceColIdx) + 1;
+    const estData = estSheet
+      .getRange(2, 1, numEstRows, colsToRead)
+      .getValues();
+
+    const estMap = new Map();
+    estData.forEach(row => {
+      const name = String(row[companyColIdx] || "").trim().toLowerCase();
+      if (!name) return;
+      const src = sourceColIdx !== -1
+        ? String(row[sourceColIdx] || "").trim().toLowerCase()
+        : "";
+      estMap.set(name, src === "signals" ? TAG_SIGNALS : TAG_HEURISTIC);
+    });
+
+    Logger.log(`[markEstMistakeInShortlist] ${estMap.size} companies loaded from EST_MISTAKE`);
 
     // ── Scan SHORTLIST and (re)apply marks ────────────────
     const numRows  = shortlistSheet.getLastRow() - 1;
@@ -843,35 +865,35 @@ function markEstMistakeInShortlist() {
       .getValues();
 
     const MARK_COLOR  = "#ffe0b2"; // orange — distinct from band A/B/C colours
-    const MARK_TAG    = "EST_MISTAKE match";
-
-    // Band colours used by buildShortlist (needed for clearing marks back)
     const BAND_COLORS = { A: "#d4edda", B: "#cce5ff", C: "#fff3cd" };
+
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const stripTags   = text =>
+      ALL_TAGS.reduce(
+        (t, tag) => t.replace(new RegExp(";?\\s*" + escapeRegex(tag), "g"), ""),
+        text
+      ).trim();
 
     let matched = 0;
 
     slData.forEach((row, idx) => {
-      const company = String(row[1] || "").trim().toLowerCase(); // col 2 = index 1
-      const band    = String(row[16] || "").trim();
-      const rowNum  = idx + 2;
-      const range   = shortlistSheet.getRange(rowNum, 1, 1, numCols);
+      const company   = String(row[1] || "").trim().toLowerCase();
+      const band      = String(row[16] || "").trim();
+      const rowNum    = idx + 2;
+      const range     = shortlistSheet.getRange(rowNum, 1, 1, numCols);
+      const notesCell = shortlistSheet.getRange(rowNum, 20);
 
-      if (estNames.has(company)) {
+      if (estMap.has(company)) {
+        const tag     = estMap.get(company);
+        const cleaned = stripTags(String(notesCell.getValue() || ""));
         range.setBackground(MARK_COLOR);
-        const notesCell = shortlistSheet.getRange(rowNum, 20);
-        const existing  = String(notesCell.getValue() || "").trim();
-        if (!existing.includes(MARK_TAG)) {
-          notesCell.setValue(existing ? existing + "; " + MARK_TAG : MARK_TAG);
-        }
+        notesCell.setValue(cleaned ? cleaned + "; " + tag : tag);
         matched++;
       } else {
-        // Restore the original band colour (clear any stale orange from a previous run)
-        const noteVal = String(shortlistSheet.getRange(rowNum, 20).getValue() || "");
-        if (noteVal.includes(MARK_TAG)) {
-          // Remove the tag from Manual_Notes
-          shortlistSheet.getRange(rowNum, 20)
-            .setValue(noteVal.replace(/;?\s*EST_MISTAKE match/g, "").trim());
-          // Restore band colour
+        // Clear any stale marks from a previous run
+        const noteVal = String(notesCell.getValue() || "");
+        if (ALL_TAGS.some(t => noteVal.includes(t))) {
+          notesCell.setValue(stripTags(noteVal));
           range.setBackground(BAND_COLORS[band] || null);
         }
       }
@@ -879,7 +901,7 @@ function markEstMistakeInShortlist() {
 
     SpreadsheetApp.flush();
 
-    const msg = `${matched} of ${estNames.size} EST_MISTAKE companies found and highlighted in SHORTLIST`;
+    const msg = `${matched} of ${estMap.size} EST_MISTAKE companies found and highlighted in SHORTLIST`;
     Logger.log(`[markEstMistakeInShortlist] ${msg}`);
     SpreadsheetApp.getActive().toast(msg, "Done", 6);
 

@@ -124,8 +124,11 @@ function runCompany(companyObj) {
     const combinedEvidence = (directText + " " + signalText).trim();
 
     if (signalText.length > 50) {
-      revenueBand = extractDirectRevenue(signalText);
-      if (revenueBand) {
+      const sigResult = extractDirectRevenue(signalText);
+      // Only use signals to fast-reject VERY_SMALL; anything else goes to Gemini
+      // (~39% false positive rate on MID+ from general web snippets)
+      if (sigResult && sigResult.band === CONFIG.REVENUE.BANDS.VERY_SMALL) {
+        revenueBand   = sigResult;
         revenueSource = "Signals";
         EventLog.info(CURRENT_RUN_ID, company, website, 's1-revenue-l1', 'OK',
           'Revenue via signals search: ' + revenueBand.band + ' (' + revenueBand.confidence + ')');
